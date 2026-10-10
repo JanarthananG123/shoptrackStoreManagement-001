@@ -1,0 +1,8 @@
+/* Global application styles */
+.v-application {
+  transition: background-color 0.3s ease;
+}
+
+.tracking-wide {
+  letter-spacing: 0.5px;
+}

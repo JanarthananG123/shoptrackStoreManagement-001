@@ -1,0 +1,38 @@
+# Logs & Debug dumps
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# Node & Frontend dependencies
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Go build outputs & binaries
+backend/bin/
+backend/*.exe
+*.test
+*.out
+*.prof
+
+# Environment & Secret files
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# OS & Editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.sublime-workspace
