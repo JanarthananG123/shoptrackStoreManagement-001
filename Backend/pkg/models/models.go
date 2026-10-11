@@ -33,3 +33,22 @@ type StandardResponse struct {
 	Data    interface{} `json:"data,omitempty"`
 	Message string      `json:"message,omitempty"`
 }
+
+// TopSellingProduct represents product sales volume and earnings.
+type TopSellingProduct struct {
+	ProductID   string  `json:"product_id"`
+	Name        string  `json:"name"`
+	UnitsSold   int     `json:"units_sold"`
+	TotalEarned float64 `json:"total_earned"`
+}
+
+// SalesAnalytics aggregates store revenue, order volume, and top items.
+type SalesAnalytics struct {
+	TotalRevenue    float64             `json:"total_revenue"`
+	OrderCount      int                 `json:"order_count"`
+	AverageOrderVal float64             `json:"average_order_value"`
+	TotalUnitsSold  int                 `json:"total_units_sold"`
+	TopProducts     []TopSellingProduct `json:"top_products"`
+	Period          string              `json:"period"`
+}
+

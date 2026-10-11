@@ -7,6 +7,9 @@ const gOrderService = {
   checkoutOrder(pPayload) {
     const lData = pPayload;
     return gApiClient.post('/orders', lData);
+  },
+  fetchSalesAnalytics(pParams) {
+    return gApiClient.get('/analytics/sales', { params: pParams });
   }
 };
 

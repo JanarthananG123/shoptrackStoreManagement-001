@@ -154,19 +154,14 @@ func (pHandler *ProductHandler) GetOrdersHandler(pWriter http.ResponseWriter, pR
 	pHandler.sendJSON(pWriter, http.StatusOK, lOrders, "Orders retrieved successfully", true)
 }
 
-// CheckoutOrderHandler handles order checkout transactions.
+// CheckoutOrderHandler handles order checkout transactions atomically.
 func (pHandler *ProductHandler) CheckoutOrderHandler(pWriter http.ResponseWriter, pRequest *http.Request) {
 	log.Println("[ProductHandler][CheckoutOrderHandler][IN]")
 	defer log.Println("[ProductHandler][CheckoutOrderHandler][OUT]")
 
 	type lCheckoutPayload struct {
-		ID          string             `json:"id"`
-		Customer    string             `json:"customer"`
-		ItemsCount  int                `json:"itemsCount"`
-		TotalAmount float64            `json:"totalAmount"`
-		Status      string             `json:"status"`
-		CreatedAt   string             `json:"createdAt"`
-		Items       []models.OrderItem `json:"items"`
+		Customer string             `json:"customer"`
+		Items    []models.OrderItem `json:"items"`
 	}
 
 	var lPayload lCheckoutPayload
@@ -177,93 +172,113 @@ func (pHandler *ProductHandler) CheckoutOrderHandler(pWriter http.ResponseWriter
 		return
 	}
 
-	lCustomer := strings.TrimSpace(lPayload.Customer)
-	if lCustomer == "" {
-		lCustomer = "Walk-in Customer"
-	}
-
-	lTotalAmount := lPayload.TotalAmount
-	lItemsCount := lPayload.ItemsCount
-
-	if len(lPayload.Items) > 0 {
-		lTotalAmount = 0
-		lItemsCount = 0
-
-		// Validate all items and stock availability first
-		for _, lItem := range lPayload.Items {
-			if lItem.Quantity <= 0 {
-				log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO001] Invalid item quantity: %d", lItem.Quantity)
-				pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO001] Item quantity must be greater than 0", false)
-				return
-			}
-			lProd, lExists := pHandler.store.GetByID(lItem.ProductID)
-			if !lExists {
-				log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO003] Product '%s' not found", lItem.ProductID)
-				pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, fmt.Sprintf("[HNCO003] Product '%s' not found", lItem.ProductID), false)
-				return
-			}
-			if lProd.StockQuantity < lItem.Quantity {
-				log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO002] Insufficient stock for '%s': requested %d, available %d", lProd.Name, lItem.Quantity, lProd.StockQuantity)
-				pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, fmt.Sprintf("[HNCO002] Insufficient stock for '%s' (available: %d, requested: %d)", lProd.Name, lProd.StockQuantity, lItem.Quantity), false)
-				return
-			}
-		}
-
-		// Deduct stock and calculate order amounts
-		for _, lItem := range lPayload.Items {
-			lDeductErr := pHandler.store.DeductStock(lItem.ProductID, lItem.Quantity)
-			if lDeductErr != nil {
-				log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO002] Stock deduction error for '%s': %v", lItem.ProductID, lDeductErr)
-				pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, fmt.Sprintf("[HNCO002] %v", lDeductErr), false)
-				return
-			}
-			lUnitPrice := lItem.UnitPrice
-			if lUnitPrice <= 0 {
-				if lProd, lExists := pHandler.store.GetByID(lItem.ProductID); lExists {
-					lUnitPrice = lProd.Price
-				}
-			}
-			lTotalAmount += float64(lItem.Quantity) * lUnitPrice
-			lItemsCount += lItem.Quantity
-		}
-	} else if lTotalAmount <= 0 && lItemsCount <= 0 {
+	if len(lPayload.Items) == 0 {
 		log.Println("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO001] Order must contain at least one item")
 		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO001] Order must contain at least one item", false)
 		return
 	}
 
-	lOrderID := lPayload.ID
-	if lOrderID == "" {
-		lOrderID = fmt.Sprintf("ORD-%d", time.Now().UnixNano()/1000000)
+	for _, lItem := range lPayload.Items {
+		if lItem.Quantity <= 0 {
+			log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO002] Item quantity must be greater than 0: %d", lItem.Quantity)
+			pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO002] Item quantity must be greater than 0", false)
+			return
+		}
 	}
 
-	lCreatedAt := lPayload.CreatedAt
-	if lCreatedAt == "" {
-		lCreatedAt = time.Now().Format(time.RFC3339)
+	if len(lPayload.Items) > 50 {
+		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO003] Maximum 50 line items permitted per order: %d", len(lPayload.Items))
+		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO003] Maximum 50 line items permitted per order", false)
+		return
 	}
 
-	lStatus := lPayload.Status
-	if lStatus == "" {
-		lStatus = "Completed"
+	if len(lPayload.Customer) > 100 {
+		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO004] Customer name exceeds 100 characters: %d", len(lPayload.Customer))
+		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO004] Customer name exceeds 100 characters", false)
+		return
 	}
 
-	lOrder := models.Order{
-		ID:          lOrderID,
-		Customer:    lCustomer,
-		ItemsCount:  lItemsCount,
-		TotalAmount: lTotalAmount,
-		Status:      lStatus,
-		CreatedAt:   lCreatedAt,
-		Items:       lPayload.Items,
-	}
-
-	lErr = pHandler.store.SaveOrder(lOrder)
-	if lErr != nil {
-		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO004] Failed to save order '%s': %v", lOrderID, lErr)
-		pHandler.sendJSON(pWriter, http.StatusInternalServerError, nil, "[HNCO004] Failed to save order", false)
+	// Atomically validate inventory, enforce server-side prices, deduct stock, and save order
+	lOrder, lCheckoutErr := pHandler.store.CheckoutAtomic(lPayload.Customer, lPayload.Items)
+	if lCheckoutErr != nil {
+		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] Checkout failed: %v", lCheckoutErr)
+		lErrStr := lCheckoutErr.Error()
+		if strings.Contains(lErrStr, "STCA002") {
+			pHandler.sendJSON(pWriter, http.StatusNotFound, nil, "[HNCO005] Product not found", false)
+			return
+		}
+		if strings.Contains(lErrStr, "STCA003") {
+			pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO006] Insufficient stock", false)
+			return
+		}
+		pHandler.sendJSON(pWriter, http.StatusInternalServerError, nil, "[HNCO007] Internal checkout failure", false)
 		return
 	}
 
 	log.Printf("[ProductHandler][CheckoutOrderHandler] Order checkout successful: ID=%s, Customer=%s, Total=₹%.2f, Items=%d", lOrder.ID, lOrder.Customer, lOrder.TotalAmount, lOrder.ItemsCount)
 	pHandler.sendJSON(pWriter, http.StatusCreated, lOrder, "Order completed successfully", true)
+}
+
+// ParseAnalyticsDate parses ISO RFC3339 or YYYY-MM-DD query parameter strings.
+func ParseAnalyticsDate(pDateStr string, pIsEndOfDay bool) (*time.Time, error) {
+	lTrimmed := strings.TrimSpace(pDateStr)
+	if lTrimmed == "" {
+		return nil, nil
+	}
+
+	// Try RFC3339
+	if lParsed, lErr := time.Parse(time.RFC3339, lTrimmed); lErr == nil {
+		return &lParsed, nil
+	}
+
+	// Try YYYY-MM-DD
+	if lParsed, lErr := time.ParseInLocation("2006-01-02", lTrimmed, time.Local); lErr == nil {
+		if pIsEndOfDay {
+			lEndOfDay := time.Date(lParsed.Year(), lParsed.Month(), lParsed.Day(), 23, 59, 59, 999999999, time.Local)
+			return &lEndOfDay, nil
+		}
+		lStartOfDay := time.Date(lParsed.Year(), lParsed.Month(), lParsed.Day(), 0, 0, 0, 0, time.Local)
+		return &lStartOfDay, nil
+	}
+
+	return nil, fmt.Errorf("invalid date format: %s", pDateStr)
+}
+
+// GetSalesAnalyticsHandler computes and returns sales analytics with optional date filtering.
+func (pHandler *ProductHandler) GetSalesAnalyticsHandler(pWriter http.ResponseWriter, pRequest *http.Request) {
+	log.Println("[ProductHandler][GetSalesAnalyticsHandler][IN]")
+	defer log.Println("[ProductHandler][GetSalesAnalyticsHandler][OUT]")
+
+	lStartStr := pRequest.URL.Query().Get("startDate")
+	lEndStr := pRequest.URL.Query().Get("endDate")
+
+	lStartDate, lStartErr := ParseAnalyticsDate(lStartStr, false)
+	if lStartErr != nil {
+		log.Printf("[ProductHandler][GetSalesAnalyticsHandler][ERROR] [HNSA001] Invalid startDate: %v", lStartErr)
+		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNSA001] Invalid startDate format (expected RFC3339 or YYYY-MM-DD)", false)
+		return
+	}
+
+	lEndDate, lEndErr := ParseAnalyticsDate(lEndStr, true)
+	if lEndErr != nil {
+		log.Printf("[ProductHandler][GetSalesAnalyticsHandler][ERROR] [HNSA001] Invalid endDate: %v", lEndErr)
+		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNSA001] Invalid endDate format (expected RFC3339 or YYYY-MM-DD)", false)
+		return
+	}
+
+	if lStartDate != nil && lEndDate != nil && lStartDate.After(*lEndDate) {
+		log.Println("[ProductHandler][GetSalesAnalyticsHandler][ERROR] [HNSA002] startDate cannot be after endDate")
+		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNSA002] startDate cannot be after endDate", false)
+		return
+	}
+
+	lAnalytics, lErr := pHandler.store.GetSalesAnalytics(lStartDate, lEndDate)
+	if lErr != nil {
+		log.Printf("[ProductHandler][GetSalesAnalyticsHandler][ERROR] [STSA001] Failed to compute analytics: %v", lErr)
+		pHandler.sendJSON(pWriter, http.StatusInternalServerError, nil, "[STSA001] Failed to compute sales analytics", false)
+		return
+	}
+
+	log.Printf("[ProductHandler][GetSalesAnalyticsHandler] Analytics retrieved successfully for period '%s'", lAnalytics.Period)
+	pHandler.sendJSON(pWriter, http.StatusOK, lAnalytics, "Sales analytics retrieved successfully", true)
 }

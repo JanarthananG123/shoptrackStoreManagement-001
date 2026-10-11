@@ -25,6 +25,9 @@ export const EventService = {
   checkoutOrder(pPayload) {
     return gOrderService.checkoutOrder(pPayload);
   },
+  fetchSalesAnalytics(pParams) {
+    return gOrderService.fetchSalesAnalytics(pParams);
+  },
   checkHealth() {
     return gApiClient.get('/getHealth');
   },

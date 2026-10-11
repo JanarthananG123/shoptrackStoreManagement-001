@@ -11,7 +11,7 @@ func CORSMiddleware(pNext http.Handler) http.Handler {
 		log.Printf("[CORSMiddleware][IN] %s %s", pRequest.Method, pRequest.URL.Path)
 		defer log.Printf("[CORSMiddleware][OUT] %s %s", pRequest.Method, pRequest.URL.Path)
 
-		pWriter.Header().Set("Access-Control-Allow-Origin", "*")
+		pWriter.Header().Set("Access-Control-Allow-Origin", "http://localhost:8081")
 		pWriter.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		pWriter.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
