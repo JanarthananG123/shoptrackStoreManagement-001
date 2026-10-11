@@ -120,7 +120,7 @@ D:\ShopTrack\
 - **`(*MemoryStore) GetOrders() ([]models.Order, error)`**: Retrieves all completed sales orders under read lock.
 - **`(*MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.OrderItem) (*models.Order, error)`**:
   - Executes under single `sync.RWMutex.Lock()`.
-  - Enforces sanity bounds (`[STCA004]` customer <= 100 chars, `[STCA005]` items <= 50).
+  - Enforces sanity bounds (`[STCA004]` customer <= 100 UTF-8 runes, `[STCA005]` items <= 50, item quantity 1..10,000, addition overflow protection).
   - Rejects empty orders (`[STCA001]`).
   - Aggregates quantities by `product_id` across duplicate line items.
   - Validates item existence (`[STCA002]`) and inventory stock adequacy (`[STCA003]`).
@@ -463,6 +463,16 @@ func (pStore *MemoryStore) GetOrders() ([]models.Order, error) {
 	return lList, nil
 }
 
+// CheckoutError defines a structured error for checkout operations with code and message.
+type CheckoutError struct {
+	Code    string
+	Message string
+}
+
+func (pErr *CheckoutError) Error() string {
+	return fmt.Sprintf("[%s] %s", pErr.Code, pErr.Message)
+}
+
 // CheckoutAtomic performs an atomic inventory validation, deduction, price enforcement, and order creation.
 func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.OrderItem) (*models.Order, error) {
 	log.Printf("[Storage][CheckoutAtomic][IN] Customer: %s, Items count: %d", pCustomer, len(pItems))
@@ -471,20 +481,20 @@ func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.Orde
 	pStore.mu.Lock()
 	defer pStore.mu.Unlock()
 
-	if len(pCustomer) > 100 {
-		lErr := fmt.Errorf("[STCA004] customer name too long")
+	if utf8.RuneCountInString(pCustomer) > 100 {
+		lErr := &CheckoutError{Code: "STCA004", Message: "customer name too long"}
 		log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 		return nil, lErr
 	}
 
 	if len(pItems) == 0 {
-		lErr := fmt.Errorf("[STCA001] order must contain at least one item")
+		lErr := &CheckoutError{Code: "STCA001", Message: "order must contain at least one item"}
 		log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 		return nil, lErr
 	}
 
 	if len(pItems) > 50 {
-		lErr := fmt.Errorf("[STCA005] too many line items")
+		lErr := &CheckoutError{Code: "STCA005", Message: "too many line items"}
 		log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 		return nil, lErr
 	}
@@ -493,13 +503,18 @@ func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.Orde
 	lAggregated := make(map[string]int)
 	var lSeenProductIDs []string
 	for _, lItem := range pItems {
-		if lItem.Quantity <= 0 {
-			lErr := fmt.Errorf("[STCA001] item quantity must be greater than 0")
+		if lItem.Quantity <= 0 || lItem.Quantity > 10000 {
+			lErr := &CheckoutError{Code: "STCA001", Message: "item quantity must be between 1 and 10,000"}
 			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 			return nil, lErr
 		}
 		if _, lExists := lAggregated[lItem.ProductID]; !lExists {
 			lSeenProductIDs = append(lSeenProductIDs, lItem.ProductID)
+		}
+		if lAggregated[lItem.ProductID] > 1000000-lItem.Quantity {
+			lErr := &CheckoutError{Code: "STCA001", Message: "accumulated quantity exceeds maximum permissible limit"}
+			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
+			return nil, lErr
 		}
 		lAggregated[lItem.ProductID] += lItem.Quantity
 	}
@@ -508,12 +523,12 @@ func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.Orde
 	for lProductID, lRequiredQty := range lAggregated {
 		lProd, lExists := pStore.products[lProductID]
 		if !lExists {
-			lErr := fmt.Errorf("[STCA002] product not found: %s", lProductID)
+			lErr := &CheckoutError{Code: "STCA002", Message: fmt.Sprintf("product not found: %s", lProductID)}
 			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 			return nil, lErr
 		}
 		if lProd.StockQuantity < lRequiredQty {
-			lErr := fmt.Errorf("[STCA003] insufficient stock for '%s': available %d, requested %d", lProd.Name, lProd.StockQuantity, lRequiredQty)
+			lErr := &CheckoutError{Code: "STCA003", Message: fmt.Sprintf("insufficient stock for '%s': available %d, requested %d", lProd.Name, lProd.StockQuantity, lRequiredQty)}
 			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 			return nil, lErr
 		}
