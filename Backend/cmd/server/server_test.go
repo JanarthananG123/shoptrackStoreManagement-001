@@ -241,6 +241,46 @@ func TestOrders(pT *testing.T) {
 	}
 }
 
+func TestMultiItemAtomicRollback(pT *testing.T) {
+	lHandler, lStore := setupTestRouter()
+
+	// 1. Fetch initial stock for prod-1 (available: 15)
+	lProd1Initial, lFound1 := lStore.GetByID("prod-1")
+	if !lFound1 {
+		pT.Fatalf("Product prod-1 not found in store")
+	}
+	if lProd1Initial.StockQuantity != 15 {
+		pT.Fatalf("Expected initial stock for prod-1 to be 15, got %d", lProd1Initial.StockQuantity)
+	}
+
+	// 2. Submit checkout with 2 items:
+	//    - Item 1: prod-1 with quantity 2 (valid)
+	//    - Item 2: prod-2 with quantity 999 (exceeds stock)
+	lOrderPayload := `{"customer":"Multi-Item Rollback Test","items":[{"product_id":"prod-1","quantity":2},{"product_id":"prod-2","quantity":999}]}`
+	lReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lOrderPayload))
+	lReq.Header.Set("Content-Type", "application/json")
+	lRec := httptest.NewRecorder()
+	lHandler.ServeHTTP(lRec, lReq)
+
+	// 3. Verify handler returns HTTP 400 with error code STCA003
+	if lRec.Code != http.StatusBadRequest {
+		pT.Fatalf("Expected HTTP 400 for multi-item order with exceeding quantity, got %d. Body: %s", lRec.Code, lRec.Body.String())
+	}
+	if !strings.Contains(lRec.Body.String(), "STCA003") {
+		pT.Errorf("Expected error code STCA003 in response body, got: %s", lRec.Body.String())
+	}
+
+	// 4. Fetch prod-1 and assert that its stock remains 15 (no partial stock deduction occurred)
+	lProd1After, lFoundAfter := lStore.GetByID("prod-1")
+	if !lFoundAfter {
+		pT.Fatalf("Product prod-1 not found in store after checkout attempt")
+	}
+	if lProd1After.StockQuantity != 15 {
+		pT.Errorf("Expected stock for prod-1 to remain 15 (atomic rollback failed), got %d", lProd1After.StockQuantity)
+	}
+}
+
+
 func TestSalesAnalytics(pT *testing.T) {
 	lHandler, _ := setupTestRouter()
 

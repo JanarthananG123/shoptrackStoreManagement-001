@@ -177,31 +177,6 @@ func (pStore *MemoryStore) GetOrders() ([]models.Order, error) {
 	return lList, nil
 }
 
-// SaveOrder stores a new sales order in memory with collision prevention.
-func (pStore *MemoryStore) SaveOrder(pOrder models.Order) error {
-	log.Printf("[Storage][SaveOrder][IN] ID: %s, Customer: %s, Total: ₹%.2f", pOrder.ID, pOrder.Customer, pOrder.TotalAmount)
-	defer log.Printf("[Storage][SaveOrder][OUT] ID: %s", pOrder.ID)
-
-	if pOrder.ID == "" {
-		lErr := fmt.Errorf("order ID cannot be empty")
-		log.Printf("[Storage][SaveOrder][ERROR] %v", lErr)
-		return lErr
-	}
-
-	pStore.mu.Lock()
-	defer pStore.mu.Unlock()
-
-	if _, lExists := pStore.orders[pOrder.ID]; lExists {
-		lErr := fmt.Errorf("[STSO001] order id already exists: %s", pOrder.ID)
-		log.Printf("[Storage][SaveOrder][ERROR] %v", lErr)
-		return lErr
-	}
-
-	pStore.orders[pOrder.ID] = pOrder
-	log.Printf("[Storage][SaveOrder] Successfully stored order ID: %s", pOrder.ID)
-	return nil
-}
-
 // CheckoutAtomic performs an atomic inventory validation, deduction, price enforcement, and order creation.
 func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.OrderItem) (*models.Order, error) {
 	log.Printf("[Storage][CheckoutAtomic][IN] Customer: %s, Items count: %d", pCustomer, len(pItems))
@@ -297,32 +272,6 @@ func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.Orde
 	return &lOrder, nil
 }
 
-// DeductStock decreases product stock in a thread-safe manner.
-func (pStore *MemoryStore) DeductStock(pProductID string, pQuantity int) error {
-	log.Printf("[Storage][DeductStock][IN] ProductID: %s, Quantity: %d", pProductID, pQuantity)
-	defer log.Printf("[Storage][DeductStock][OUT] ProductID: %s", pProductID)
-
-	pStore.mu.Lock()
-	defer pStore.mu.Unlock()
-
-	lProd, lExists := pStore.products[pProductID]
-	if !lExists {
-		lErr := fmt.Errorf("product '%s' not found", pProductID)
-		log.Printf("[Storage][DeductStock][ERROR] %v", lErr)
-		return lErr
-	}
-	if lProd.StockQuantity < pQuantity {
-		lErr := fmt.Errorf("insufficient stock for '%s': available %d, requested %d", lProd.Name, lProd.StockQuantity, pQuantity)
-		log.Printf("[Storage][DeductStock][ERROR] %v", lErr)
-		return lErr
-	}
-
-	lProd.StockQuantity -= pQuantity
-	pStore.products[pProductID] = lProd
-	log.Printf("[Storage][DeductStock] Updated stock for '%s': remaining %d", lProd.Name, lProd.StockQuantity)
-	return nil
-}
-
 // GetSalesAnalytics computes aggregate sales metrics and top selling products within an optional date range.
 func (pStore *MemoryStore) GetSalesAnalytics(pStartDate *time.Time, pEndDate *time.Time) (*models.SalesAnalytics, error) {
 	log.Println("[Storage][GetSalesAnalytics][IN]")
@@ -345,8 +294,12 @@ func (pStore *MemoryStore) GetSalesAnalytics(pStartDate *time.Time, pEndDate *ti
 			lOrderTime, lErr = time.Parse("2006-01-02", lOrder.CreatedAt)
 		}
 
-		// Apply date filters if parsed successfully
-		if lErr == nil {
+		// Apply date filters: exclude order if unparseable or out of date boundaries
+		if pStartDate != nil || pEndDate != nil {
+			if lErr != nil {
+				log.Printf("[Storage][GetSalesAnalytics][WARN] Failed to parse CreatedAt '%s' for order ID %s: %v. Excluding from date-filtered results.", lOrder.CreatedAt, lOrder.ID, lErr)
+				continue
+			}
 			if pStartDate != nil && lOrderTime.Before(*pStartDate) {
 				continue
 			}

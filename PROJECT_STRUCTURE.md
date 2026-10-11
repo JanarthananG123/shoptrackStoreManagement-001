@@ -118,7 +118,6 @@ D:\ShopTrack\
 - **`(*MemoryStore) GetByID(pID string) (models.Product, bool)`**: Retrieves single product by ID under read lock.
 - **`(*MemoryStore) Save(pProduct models.Product) error`**: Inserts or updates inventory product under write lock.
 - **`(*MemoryStore) GetOrders() ([]models.Order, error)`**: Retrieves all completed sales orders under read lock.
-- **`(*MemoryStore) SaveOrder(pOrder models.Order) error`**: Persists order with duplicate ID collision protection (`[STSO001]`).
 - **`(*MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.OrderItem) (*models.Order, error)`**:
   - Executes under single `sync.RWMutex.Lock()`.
   - Rejects empty orders (`[STCA001]`).
@@ -131,7 +130,6 @@ D:\ShopTrack\
   - Filters orders by date range if provided.
   - Aggregates revenue, order volume, AOV, and units sold.
   - Aggregates and ranks Top 5 best-selling products by units sold and revenue.
-- **`(*MemoryStore) DeductStock(pProductID string, pQuantity int) error`**: Thread-safe stock decrement with validation.
 
 ---
 
@@ -463,31 +461,6 @@ func (pStore *MemoryStore) GetOrders() ([]models.Order, error) {
 	return lList, nil
 }
 
-// SaveOrder stores a new sales order in memory with collision prevention.
-func (pStore *MemoryStore) SaveOrder(pOrder models.Order) error {
-	log.Printf("[Storage][SaveOrder][IN] ID: %s, Customer: %s, Total: ₹%.2f", pOrder.ID, pOrder.Customer, pOrder.TotalAmount)
-	defer log.Printf("[Storage][SaveOrder][OUT] ID: %s", pOrder.ID)
-
-	if pOrder.ID == "" {
-		lErr := fmt.Errorf("order ID cannot be empty")
-		log.Printf("[Storage][SaveOrder][ERROR] %v", lErr)
-		return lErr
-	}
-
-	pStore.mu.Lock()
-	defer pStore.mu.Unlock()
-
-	if _, lExists := pStore.orders[pOrder.ID]; lExists {
-		lErr := fmt.Errorf("[STSO001] order id already exists: %s", pOrder.ID)
-		log.Printf("[Storage][SaveOrder][ERROR] %v", lErr)
-		return lErr
-	}
-
-	pStore.orders[pOrder.ID] = pOrder
-	log.Printf("[Storage][SaveOrder] Successfully stored order ID: %s", pOrder.ID)
-	return nil
-}
-
 // CheckoutAtomic performs an atomic inventory validation, deduction, price enforcement, and order creation.
 func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.OrderItem) (*models.Order, error) {
 	log.Printf("[Storage][CheckoutAtomic][IN] Customer: %s, Items count: %d", pCustomer, len(pItems))
@@ -581,32 +554,6 @@ func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.Orde
 	pStore.orders[lOrderID] = lOrder
 	log.Printf("[Storage][CheckoutAtomic] Order successfully saved: ID=%s, Customer=%s, Total=₹%.2f, Items=%d", lOrderID, lCustomerName, lTotalAmount, lItemsCount)
 	return &lOrder, nil
-}
-
-// DeductStock decreases product stock in a thread-safe manner.
-func (pStore *MemoryStore) DeductStock(pProductID string, pQuantity int) error {
-	log.Printf("[Storage][DeductStock][IN] ProductID: %s, Quantity: %d", pProductID, pQuantity)
-	defer log.Printf("[Storage][DeductStock][OUT] ProductID: %s", pProductID)
-
-	pStore.mu.Lock()
-	defer pStore.mu.Unlock()
-
-	lProd, lExists := pStore.products[pProductID]
-	if !lExists {
-		lErr := fmt.Errorf("product '%s' not found", pProductID)
-		log.Printf("[Storage][DeductStock][ERROR] %v", lErr)
-		return lErr
-	}
-	if lProd.StockQuantity < pQuantity {
-		lErr := fmt.Errorf("insufficient stock for '%s': available %d, requested %d", lProd.Name, lProd.StockQuantity, pQuantity)
-		log.Printf("[Storage][DeductStock][ERROR] %v", lErr)
-		return lErr
-	}
-
-	lProd.StockQuantity -= pQuantity
-	pStore.products[pProductID] = lProd
-	log.Printf("[Storage][DeductStock] Updated stock for '%s': remaining %d", lProd.Name, lProd.StockQuantity)
-	return nil
 }
 
 // GetSalesAnalytics computes aggregate sales metrics and top selling products within an optional date range.

@@ -203,12 +203,12 @@ func ParseAnalyticsDate(pDateStr string, pIsEndOfDay bool) (*time.Time, error) {
 	}
 
 	// Try YYYY-MM-DD
-	if lParsed, lErr := time.Parse("2006-01-02", lTrimmed); lErr == nil {
+	if lParsed, lErr := time.ParseInLocation("2006-01-02", lTrimmed, time.Local); lErr == nil {
 		if pIsEndOfDay {
-			lEndOfDay := time.Date(lParsed.Year(), lParsed.Month(), lParsed.Day(), 23, 59, 59, 999999999, time.UTC)
+			lEndOfDay := time.Date(lParsed.Year(), lParsed.Month(), lParsed.Day(), 23, 59, 59, 999999999, time.Local)
 			return &lEndOfDay, nil
 		}
-		lStartOfDay := time.Date(lParsed.Year(), lParsed.Month(), lParsed.Day(), 0, 0, 0, 0, time.UTC)
+		lStartOfDay := time.Date(lParsed.Year(), lParsed.Month(), lParsed.Day(), 0, 0, 0, 0, time.Local)
 		return &lStartOfDay, nil
 	}
 

@@ -603,6 +603,13 @@
 <script>
 import EventService from '../services';
 
+function formatLocalDate(pDate) {
+  const lYear = pDate.getFullYear();
+  const lMonth = String(pDate.getMonth() + 1).padStart(2, '0');
+  const lDay = String(pDate.getDate()).padStart(2, '0');
+  return `${lYear}-${lMonth}-${lDay}`;
+}
+
 export default {
   name: 'SalesView',
   data() {
@@ -614,6 +621,8 @@ export default {
       selectedPeriod: 'all',
       startDate: '',
       endDate: '',
+      appliedStartDate: '',
+      appliedEndDate: '',
       orders: [],
       availableProducts: [],
       selectedOrder: null,
@@ -652,27 +661,27 @@ export default {
       const lNow = new Date();
 
       if (this.selectedPeriod === 'today') {
-        lStart = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate(), 0, 0, 0);
+        lStart = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate(), 0, 0, 0, 0);
         lEnd = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate(), 23, 59, 59, 999);
       } else if (this.selectedPeriod === 'last7') {
-        lStart = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-        lEnd = lNow;
+        lStart = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate() - 7, 0, 0, 0, 0);
+        lEnd = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate(), 23, 59, 59, 999);
       } else if (this.selectedPeriod === 'last30') {
-        lStart = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-        lEnd = lNow;
+        lStart = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate() - 30, 0, 0, 0, 0);
+        lEnd = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate(), 23, 59, 59, 999);
       } else if (this.selectedPeriod === 'custom') {
-        if (this.startDate) {
-          lStart = new Date(this.startDate + 'T00:00:00');
+        if (this.appliedStartDate) {
+          lStart = new Date(this.appliedStartDate + 'T00:00:00');
         }
-        if (this.endDate) {
-          lEnd = new Date(this.endDate + 'T23:59:59.999');
+        if (this.appliedEndDate) {
+          lEnd = new Date(this.appliedEndDate + 'T23:59:59.999');
         }
       }
 
       return this.orders.filter(pOrder => {
-        if (!pOrder.createdAt) return true;
+        if (!pOrder.createdAt) return false;
         const lOrderDate = new Date(pOrder.createdAt);
-        if (isNaN(lOrderDate.getTime())) return true;
+        if (isNaN(lOrderDate.getTime())) return false;
         if (lStart && lOrderDate < lStart) return false;
         if (lEnd && lOrderDate > lEnd) return false;
         return true;
@@ -785,22 +794,23 @@ export default {
       this.analyticsLoading = true;
       try {
         const lParams = {};
+        const lNow = new Date();
+        const lTodayStr = formatLocalDate(lNow);
+
         if (this.selectedPeriod === 'today') {
-          const lNow = new Date();
-          const lTodayStr = lNow.toISOString().slice(0, 10);
           lParams.startDate = lTodayStr;
           lParams.endDate = lTodayStr;
         } else if (this.selectedPeriod === 'last7') {
-          const lPast = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-          lParams.startDate = lPast.toISOString().slice(0, 10);
-          lParams.endDate = new Date().toISOString().slice(0, 10);
+          const lPast7 = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate() - 7);
+          lParams.startDate = formatLocalDate(lPast7);
+          lParams.endDate = lTodayStr;
         } else if (this.selectedPeriod === 'last30') {
-          const lPast = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-          lParams.startDate = lPast.toISOString().slice(0, 10);
-          lParams.endDate = new Date().toISOString().slice(0, 10);
+          const lPast30 = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate() - 30);
+          lParams.startDate = formatLocalDate(lPast30);
+          lParams.endDate = lTodayStr;
         } else if (this.selectedPeriod === 'custom') {
-          if (this.startDate) lParams.startDate = this.startDate;
-          if (this.endDate) lParams.endDate = this.endDate;
+          if (this.appliedStartDate) lParams.startDate = this.appliedStartDate;
+          if (this.appliedEndDate) lParams.endDate = this.appliedEndDate;
         }
 
         const lResponse = await EventService.orders.fetchSalesAnalytics(lParams);
@@ -817,6 +827,8 @@ export default {
       if (pPeriod !== 'custom') {
         this.startDate = '';
         this.endDate = '';
+        this.appliedStartDate = '';
+        this.appliedEndDate = '';
         this.fetchAnalytics();
       }
     },
@@ -825,12 +837,16 @@ export default {
         this.showSnackbar('[HNSA002] Start date cannot be after end date.', 'error');
         return;
       }
+      this.appliedStartDate = this.startDate;
+      this.appliedEndDate = this.endDate;
       this.fetchAnalytics();
     },
     clearDateFilter() {
       this.selectedPeriod = 'all';
       this.startDate = '';
       this.endDate = '';
+      this.appliedStartDate = '';
+      this.appliedEndDate = '';
       this.fetchAnalytics();
     },
     exportCSV() {
@@ -855,7 +871,7 @@ export default {
         const lUrl = URL.createObjectURL(lBlob);
         const lLink = document.createElement('a');
         lLink.setAttribute('href', lUrl);
-        lLink.setAttribute('download', `shoptrack_sales_${new Date().toISOString().slice(0, 10)}.csv`);
+        lLink.setAttribute('download', `shoptrack_sales_${formatLocalDate(new Date())}.csv`);
         document.body.appendChild(lLink);
         lLink.click();
         document.body.removeChild(lLink);
