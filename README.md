@@ -48,6 +48,17 @@ A full-stack store and inventory management service built with Go (Gorilla Mux) 
   - Interactive data table listing completed orders with item details, formatted dates, status badges, and receipt detail modal.
   - Registered route at `/sales` with navigation buttons directly in the top application bar.
 
+### 6. Sales Reporting Analytics & Export
+- **Server-Side Analytics Engine (`/api/analytics/sales`)**:
+  - Aggregates total revenue, order volume, average order value, and total units sold.
+  - Computes top 5 best-selling products by units sold and total earnings.
+  - Supports ISO 8601 / RFC3339 and `YYYY-MM-DD` date range filters (`startDate`, `endDate`) with validation error codes (`[HNSA001]`, `[HNSA002]`).
+- **Client-Side Reporting Enhancements**:
+  - Date filter toolbar with quick presets (All Time, Today, Last 7 Days, Last 30 Days, Custom Range).
+  - Top 5 Best-Selling Products widget with ranking chips (#1 to #5) and volume progress bars.
+  - Synchronized real-time KPI metrics.
+  - Client-side CSV transaction export with RFC-compliant escaping and structured error handling (`[SVSA001]`).
+
 ---
 
 ## API Endpoints Reference
@@ -60,6 +71,7 @@ A full-stack store and inventory management service built with Go (Gorilla Mux) 
 | `POST` | `/api/getProducts` | Create a new inventory product |
 | `GET` | `/api/orders` | Retrieve completed sales orders |
 | `POST` | `/api/orders` | Checkout and record a new sales order |
+| `GET` | `/api/analytics/sales` | Aggregated sales metrics & top products with optional date range |
 | `OPTIONS` | Any route | CORS preflight returning HTTP 200 OK |
 | `GET` | `/panic` | Panic simulation route for recovery verification |
 

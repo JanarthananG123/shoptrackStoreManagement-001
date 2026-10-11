@@ -25,6 +25,8 @@ func registerRoutes(pRouter *mux.Router, pHandler *handlers.ProductHandler) {
 	pRouter.HandleFunc("/getProducts", pHandler.CreateProductHandler).Methods(http.MethodPost)
 	pRouter.HandleFunc("/orders", pHandler.GetOrdersHandler).Methods(http.MethodGet)
 	pRouter.HandleFunc("/orders", pHandler.CheckoutOrderHandler).Methods(http.MethodPost)
+	pRouter.HandleFunc("/analytics/sales", pHandler.GetSalesAnalyticsHandler).Methods(http.MethodGet)
+	pRouter.HandleFunc("/getSalesAnalytics", pHandler.GetSalesAnalyticsHandler).Methods(http.MethodGet)
 	pRouter.HandleFunc("/panic", func(pWriter http.ResponseWriter, pRequest *http.Request) {
 		log.Println("[Router][panic][IN] Simulating panic")
 		panic("simulated server panic for verification")

@@ -24,7 +24,7 @@
             <v-list-item-content>
               <div class="text-overline mb-1">Completed Orders</div>
               <v-list-item-title class="text-h5 font-weight-bold primary--text">
-                {{ orders.length }}
+                {{ completedOrdersCount }}
               </v-list-item-title>
             </v-list-item-content>
             <v-avatar color="primary lighten-4" size="52">
@@ -67,114 +67,282 @@
       </v-col>
     </v-row>
 
-    <!-- Main Sales Table Card -->
-    <v-card elevation="4" class="rounded-lg">
-      <v-card-title class="py-4 px-6">
-        <v-icon left color="primary" medium>mdi-point-of-sale</v-icon>
-        <span class="text-h6 font-weight-bold">Completed Sales History</span>
-        <v-spacer></v-spacer>
-
-        <!-- Search Input -->
-        <v-text-field
-          v-model="search"
-          append-icon="mdi-magnify"
-          label="Search orders or customers..."
-          single-line
-          hide-details
-          outlined
-          dense
-          class="mr-4"
-          style="max-width: 280px;"
-        ></v-text-field>
-
-        <!-- Refresh Button -->
-        <v-tooltip bottom>
-          <template v-slot:activator="{ on, attrs }">
-            <v-btn
-              icon
-              color="primary"
-              v-bind="attrs"
-              v-on="on"
-              :loading="loading"
-              class="mr-2"
-              @click="fetchOrders"
-            >
-              <v-icon>mdi-refresh</v-icon>
-            </v-btn>
-          </template>
-          <span>Refresh Sales</span>
-        </v-tooltip>
-
-        <!-- Record Sale Button -->
-        <v-btn
-          color="primary"
-          class="font-weight-bold"
-          @click="openSalesDialog"
-        >
-          <v-icon left>mdi-cart-plus</v-icon>
-          Record Sale
-        </v-btn>
-      </v-card-title>
-
-      <v-divider></v-divider>
-
-      <!-- Orders Data Table -->
-      <v-data-table
-        :headers="headers"
-        :items="orders"
-        :search="search"
-        :loading="loading"
-        loading-text="Fetching sales transactions via EventService..."
-        no-data-text="No sales records available"
-        class="elevation-0"
-      >
-        <!-- Order ID Slot -->
-        <template v-slot:item.id="{ item }">
-          <span class="font-weight-medium primary--text">#{{ item.id }}</span>
-        </template>
-
-        <!-- Total Amount Slot -->
-        <template v-slot:item.totalAmount="{ item }">
-          <span class="font-weight-bold success--text">
-            ₹{{ Number(item.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+    <!-- Analytics Date Filter & Reporting Toolbar Card -->
+    <v-card elevation="2" class="rounded-lg mb-4 pa-4">
+      <v-row align="center" dense>
+        <!-- Period Filter Button Toggle -->
+        <v-col cols="12" md="8" class="d-flex flex-wrap align-center">
+          <span class="caption font-weight-bold text-uppercase mr-3 text--secondary">
+            <v-icon small left color="primary">mdi-calendar-range</v-icon>
+            Period:
           </span>
-        </template>
-
-        <!-- Items Quantity Slot -->
-        <template v-slot:item.itemsCount="{ item }">
-          <span>{{ item.itemsCount }} item{{ item.itemsCount === 1 ? '' : 's' }}</span>
-        </template>
-
-        <!-- Date Slot -->
-        <template v-slot:item.createdAt="{ item }">
-          <span>{{ formatDate(item.createdAt) }}</span>
-        </template>
-
-        <!-- Status Chip Slot -->
-        <template v-slot:item.status="{ item }">
-          <v-chip
-            small
-            color="success lighten-1"
-            class="white--text font-weight-bold"
-          >
-            <v-icon left x-small>mdi-check-circle</v-icon>
-            {{ item.status || 'Completed' }}
-          </v-chip>
-        </template>
-
-        <!-- Actions Slot -->
-        <template v-slot:item.actions="{ item }">
-          <v-btn
-            icon
-            small
+          <v-btn-toggle
+            v-model="selectedPeriod"
+            mandatory
+            dense
             color="primary"
-            @click="showOrderDetails(item)"
+            class="elevation-0"
+            @change="onPeriodChange"
           >
-            <v-icon small>mdi-receipt-text</v-icon>
+            <v-btn small value="all" class="font-weight-medium text-capitalize">All Time</v-btn>
+            <v-btn small value="today" class="font-weight-medium text-capitalize">Today</v-btn>
+            <v-btn small value="last7" class="font-weight-medium text-capitalize">Last 7 Days</v-btn>
+            <v-btn small value="last30" class="font-weight-medium text-capitalize">Last 30 Days</v-btn>
+            <v-btn small value="custom" class="font-weight-medium text-capitalize">Custom Range</v-btn>
+          </v-btn-toggle>
+        </v-col>
+
+        <!-- Actions: Refresh & CSV Export -->
+        <v-col cols="12" md="4" class="d-flex justify-md-end align-center mt-2 mt-md-0">
+          <v-btn
+            color="success"
+            outlined
+            dense
+            small
+            class="font-weight-bold mr-2"
+            @click="exportCSV"
+          >
+            <v-icon left small>mdi-file-delimited</v-icon>
+            Export CSV
           </v-btn>
-        </template>
-      </v-data-table>
+          <v-btn
+            color="primary"
+            class="font-weight-bold"
+            small
+            @click="openSalesDialog"
+          >
+            <v-icon left small>mdi-cart-plus</v-icon>
+            Record Sale
+          </v-btn>
+        </v-col>
+      </v-row>
+
+      <!-- Custom Date Range Sub-Bar -->
+      <v-expand-transition>
+        <div v-if="selectedPeriod === 'custom'" class="pt-3 mt-2">
+          <v-divider class="mb-3"></v-divider>
+          <v-row dense align="center">
+            <v-col cols="12" sm="4" md="3">
+              <v-text-field
+                v-model="startDate"
+                label="Start Date"
+                type="date"
+                outlined
+                dense
+                hide-details
+                prepend-inner-icon="mdi-calendar-start"
+              ></v-text-field>
+            </v-col>
+            <v-col cols="12" sm="4" md="3">
+              <v-text-field
+                v-model="endDate"
+                label="End Date"
+                type="date"
+                outlined
+                dense
+                hide-details
+                prepend-inner-icon="mdi-calendar-end"
+              ></v-text-field>
+            </v-col>
+            <v-col cols="12" sm="4" md="3" class="d-flex align-center">
+              <v-btn
+                color="primary"
+                small
+                class="font-weight-bold mr-2"
+                :loading="analyticsLoading"
+                @click="applyDateFilter"
+              >
+                Apply Filter
+              </v-btn>
+              <v-btn
+                text
+                small
+                @click="clearDateFilter"
+              >
+                Reset
+              </v-btn>
+            </v-col>
+          </v-row>
+        </div>
+      </v-expand-transition>
     </v-card>
+
+    <!-- Main Content: Sales History (Left) & Top Products Breakdown (Right) -->
+    <v-row>
+      <!-- Completed Sales History Table Column -->
+      <v-col cols="12" lg="8">
+        <v-card elevation="4" class="rounded-lg h-100">
+          <v-card-title class="py-4 px-6">
+            <v-icon left color="primary" medium>mdi-point-of-sale</v-icon>
+            <span class="text-h6 font-weight-bold">Completed Sales History</span>
+            <v-spacer></v-spacer>
+
+            <!-- Search Input -->
+            <v-text-field
+              v-model="search"
+              append-icon="mdi-magnify"
+              label="Search orders or customers..."
+              single-line
+              hide-details
+              outlined
+              dense
+              class="mr-2"
+              style="max-width: 260px;"
+            ></v-text-field>
+
+            <!-- Refresh Button -->
+            <v-tooltip bottom>
+              <template v-slot:activator="{ on, attrs }">
+                <v-btn
+                  icon
+                  color="primary"
+                  v-bind="attrs"
+                  v-on="on"
+                  :loading="loading"
+                  @click="refreshData"
+                >
+                  <v-icon>mdi-refresh</v-icon>
+                </v-btn>
+              </template>
+              <span>Refresh Sales</span>
+            </v-tooltip>
+          </v-card-title>
+
+          <v-divider></v-divider>
+
+          <!-- Error Alert -->
+          <v-alert
+            v-if="errorMessage"
+            type="error"
+            dismissible
+            dense
+            class="mx-6 mt-4 mb-0"
+            @input="errorMessage = ''"
+          >
+            {{ errorMessage }}
+          </v-alert>
+
+          <!-- Orders Data Table -->
+          <v-data-table
+            :headers="headers"
+            :items="filteredOrders"
+            :search="search"
+            :loading="loading"
+            loading-text="Fetching sales transactions via EventService..."
+            no-data-text="No sales records available in selected period"
+            class="elevation-0"
+          >
+            <!-- Order ID Slot -->
+            <template v-slot:item.id="{ item }">
+              <span class="font-weight-medium primary--text">#{{ item.id }}</span>
+            </template>
+
+            <!-- Total Amount Slot -->
+            <template v-slot:item.totalAmount="{ item }">
+              <span class="font-weight-bold success--text">
+                ₹{{ Number(item.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+              </span>
+            </template>
+
+            <!-- Items Quantity Slot -->
+            <template v-slot:item.itemsCount="{ item }">
+              <span>{{ item.itemsCount }} item{{ item.itemsCount === 1 ? '' : 's' }}</span>
+            </template>
+
+            <!-- Date Slot -->
+            <template v-slot:item.createdAt="{ item }">
+              <span>{{ formatDate(item.createdAt) }}</span>
+            </template>
+
+            <!-- Status Chip Slot -->
+            <template v-slot:item.status="{ item }">
+              <v-chip
+                small
+                color="success lighten-1"
+                class="white--text font-weight-bold"
+              >
+                <v-icon left x-small>mdi-check-circle</v-icon>
+                {{ item.status || 'Completed' }}
+              </v-chip>
+            </template>
+
+            <!-- Actions Slot -->
+            <template v-slot:item.actions="{ item }">
+              <v-btn
+                icon
+                small
+                color="primary"
+                @click="showOrderDetails(item)"
+              >
+                <v-icon small>mdi-receipt-text</v-icon>
+              </v-btn>
+            </template>
+          </v-data-table>
+        </v-card>
+      </v-col>
+
+      <!-- Top 5 Best-Selling Products Breakdown Widget -->
+      <v-col cols="12" lg="4">
+        <v-card elevation="4" class="rounded-lg h-100">
+          <v-card-title class="py-4 px-6 d-flex align-center">
+            <v-icon left color="amber darken-2" medium>mdi-podium-gold</v-icon>
+            <span class="text-h6 font-weight-bold">Top 5 Products</span>
+            <v-spacer></v-spacer>
+            <v-chip x-small color="primary lighten-4" class="primary--text font-weight-bold">
+              Volume
+            </v-chip>
+          </v-card-title>
+          <v-divider></v-divider>
+
+          <v-card-text class="pa-4">
+            <div v-if="analyticsLoading" class="text-center py-8">
+              <v-progress-circular indeterminate color="primary" size="32"></v-progress-circular>
+              <div class="caption mt-2 text--secondary">Calculating sales rankings...</div>
+            </div>
+            <div v-else-if="topSellingProducts.length === 0" class="text-center py-8 text--secondary">
+              <v-icon large color="grey lighten-1">mdi-package-variant</v-icon>
+              <div class="mt-2 caption font-weight-medium">No sales recorded in this period</div>
+            </div>
+            <div v-else>
+              <div
+                v-for="(lProd, lIdx) in topSellingProducts"
+                :key="lProd.product_id"
+                class="mb-3 pa-3 rounded-lg"
+                :class="$vuetify.theme.dark ? 'grey darken-3' : 'grey lighten-4'"
+              >
+                <div class="d-flex align-center justify-space-between mb-1">
+                  <div class="d-flex align-center">
+                    <v-chip
+                      x-small
+                      :color="lIdx === 0 ? 'amber darken-2' : lIdx === 1 ? 'blue-grey lighten-1' : lIdx === 2 ? 'brown lighten-1' : 'primary'"
+                      class="white--text font-weight-bold mr-2"
+                    >
+                      #{{ lIdx + 1 }}
+                    </v-chip>
+                    <span class="font-weight-bold text-body-2 text-truncate" style="max-width: 170px;">
+                      {{ lProd.name }}
+                    </span>
+                  </div>
+                  <span class="font-weight-bold text-caption success--text">
+                    ₹{{ Number(lProd.total_earned).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+                  </span>
+                </div>
+                <div class="d-flex align-center justify-space-between caption text--secondary mb-1">
+                  <span>{{ lProd.units_sold }} unit{{ lProd.units_sold === 1 ? '' : 's' }} sold</span>
+                  <span>{{ Math.round((lProd.units_sold / topProductMaxUnits) * 100) }}%</span>
+                </div>
+                <v-progress-linear
+                  :value="(lProd.units_sold / topProductMaxUnits) * 100"
+                  height="6"
+                  rounded
+                  :color="lIdx === 0 ? 'amber darken-2' : 'primary'"
+                ></v-progress-linear>
+              </div>
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
 
     <!-- Record Sale Modal Dialog -->
     <v-dialog v-model="lSalesDialog" max-width="720px" persistent>
@@ -441,6 +609,11 @@ export default {
     return {
       search: '',
       loading: false,
+      analyticsLoading: false,
+      serverAnalytics: null,
+      selectedPeriod: 'all',
+      startDate: '',
+      endDate: '',
       orders: [],
       availableProducts: [],
       selectedOrder: null,
@@ -448,6 +621,7 @@ export default {
       lSalesDialog: false,
       submitLoading: false,
       formError: '',
+      errorMessage: '',
       lCustomerName: 'Walk-in Customer',
       lLineItems: [
         { product: null, quantity: 1, maxStock: 0, unitPrice: 0 }
@@ -469,15 +643,97 @@ export default {
     };
   },
   computed: {
+    filteredOrders() {
+      if (!this.selectedPeriod || this.selectedPeriod === 'all') {
+        return this.orders;
+      }
+      let lStart = null;
+      let lEnd = null;
+      const lNow = new Date();
+
+      if (this.selectedPeriod === 'today') {
+        lStart = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate(), 0, 0, 0);
+        lEnd = new Date(lNow.getFullYear(), lNow.getMonth(), lNow.getDate(), 23, 59, 59, 999);
+      } else if (this.selectedPeriod === 'last7') {
+        lStart = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+        lEnd = lNow;
+      } else if (this.selectedPeriod === 'last30') {
+        lStart = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+        lEnd = lNow;
+      } else if (this.selectedPeriod === 'custom') {
+        if (this.startDate) {
+          lStart = new Date(this.startDate + 'T00:00:00');
+        }
+        if (this.endDate) {
+          lEnd = new Date(this.endDate + 'T23:59:59.999');
+        }
+      }
+
+      return this.orders.filter(pOrder => {
+        if (!pOrder.createdAt) return true;
+        const lOrderDate = new Date(pOrder.createdAt);
+        if (isNaN(lOrderDate.getTime())) return true;
+        if (lStart && lOrderDate < lStart) return false;
+        if (lEnd && lOrderDate > lEnd) return false;
+        return true;
+      });
+    },
     totalRevenue() {
-      return this.orders.reduce((lSum, lOrder) => lSum + (Number(lOrder.totalAmount) || 0), 0);
+      if (this.serverAnalytics && typeof this.serverAnalytics.total_revenue === 'number') {
+        return this.serverAnalytics.total_revenue;
+      }
+      return this.filteredOrders.reduce((lSum, lOrder) => lSum + (Number(lOrder.totalAmount) || 0), 0);
+    },
+    completedOrdersCount() {
+      if (this.serverAnalytics && typeof this.serverAnalytics.order_count === 'number') {
+        return this.serverAnalytics.order_count;
+      }
+      return this.filteredOrders.length;
     },
     averageOrderValue() {
-      if (this.orders.length === 0) return 0;
-      return this.totalRevenue / this.orders.length;
+      if (this.serverAnalytics && typeof this.serverAnalytics.average_order_value === 'number') {
+        return this.serverAnalytics.average_order_value;
+      }
+      if (this.completedOrdersCount === 0) return 0;
+      return this.totalRevenue / this.completedOrdersCount;
     },
     totalUnitsSold() {
-      return this.orders.reduce((lSum, lOrder) => lSum + (Number(lOrder.itemsCount) || 0), 0);
+      if (this.serverAnalytics && typeof this.serverAnalytics.total_units_sold === 'number') {
+        return this.serverAnalytics.total_units_sold;
+      }
+      return this.filteredOrders.reduce((lSum, lOrder) => lSum + (Number(lOrder.itemsCount) || 0), 0);
+    },
+    topSellingProducts() {
+      if (this.serverAnalytics && Array.isArray(this.serverAnalytics.top_products)) {
+        return this.serverAnalytics.top_products;
+      }
+      // Fallback client-side calculation from filteredOrders
+      const lMap = {};
+      for (const lOrder of this.filteredOrders) {
+        if (Array.isArray(lOrder.items)) {
+          for (const lItem of lOrder.items) {
+            if (!lMap[lItem.product_id]) {
+              const lProd = this.availableProducts.find(p => p.id === lItem.product_id);
+              lMap[lItem.product_id] = {
+                product_id: lItem.product_id,
+                name: lProd ? lProd.name : lItem.product_id,
+                units_sold: 0,
+                total_earned: 0
+              };
+            }
+            lMap[lItem.product_id].units_sold += Number(lItem.quantity) || 0;
+            lMap[lItem.product_id].total_earned += (Number(lItem.quantity) || 0) * (Number(lItem.unit_price) || 0);
+          }
+        }
+      }
+      return Object.values(lMap)
+        .sort((pA, pB) => pB.units_sold - pA.units_sold)
+        .slice(0, 5);
+    },
+    topProductMaxUnits() {
+      if (!this.topSellingProducts || this.topSellingProducts.length === 0) return 1;
+      const lMax = Math.max(...this.topSellingProducts.map(p => p.units_sold));
+      return lMax > 0 ? lMax : 1;
     },
     lDialogGrandTotal() {
       return this.lLineItems.reduce((lSum, lItem) => {
@@ -488,12 +744,19 @@ export default {
     }
   },
   mounted() {
-    this.fetchOrders();
+    this.refreshData();
     this.fetchProducts();
   },
   methods: {
+    async refreshData() {
+      await Promise.all([
+        this.fetchOrders(),
+        this.fetchAnalytics()
+      ]);
+    },
     async fetchOrders() {
       this.loading = true;
+      this.errorMessage = '';
       try {
         const lResponse = await EventService.orders.fetchOrders();
         if (lResponse.data && lResponse.data.success) {
@@ -503,39 +766,104 @@ export default {
           this.orders = lResponse.data;
           this.$emit('api-status-change', true);
         } else {
-          this.showSnackbar('Failed to load orders: ' + (lResponse.data.message || 'Unknown error'), 'error');
+          const lMsg = 'Failed to load orders: ' + (lResponse.data.message || 'Unknown error');
+          this.orders = [];
+          this.errorMessage = lMsg;
+          this.showSnackbar(lMsg, 'error');
         }
       } catch (lError) {
-        // Fallback placeholder data if backend isn't returning orders yet
-        this.orders = [
-          {
-            id: 'ORD-1001',
-            customer: 'Aarav Sharma',
-            itemsCount: 2,
-            totalAmount: 35498.00,
-            status: 'Completed',
-            createdAt: new Date(Date.now() - 48 * 3600 * 1000).toISOString()
-          },
-          {
-            id: 'ORD-1002',
-            customer: 'Priya Patel',
-            itemsCount: 1,
-            totalAmount: 24999.00,
-            status: 'Completed',
-            createdAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString()
-          },
-          {
-            id: 'ORD-1003',
-            customer: 'Rohan Verma',
-            itemsCount: 3,
-            totalAmount: 51497.00,
-            status: 'Completed',
-            createdAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString()
-          }
-        ];
-        this.showSnackbar('Loaded offline sales data (backend connecting...)', 'info');
+        const lMsg = 'Failed to fetch sales transactions: ' + (lError.response?.data?.message || lError.message || 'Network error');
+        this.orders = [];
+        this.errorMessage = lMsg;
+        this.showSnackbar(lMsg, 'error');
+        this.$emit('api-status-change', false);
       } finally {
         this.loading = false;
+      }
+    },
+    async fetchAnalytics() {
+      this.analyticsLoading = true;
+      try {
+        const lParams = {};
+        if (this.selectedPeriod === 'today') {
+          const lNow = new Date();
+          const lTodayStr = lNow.toISOString().slice(0, 10);
+          lParams.startDate = lTodayStr;
+          lParams.endDate = lTodayStr;
+        } else if (this.selectedPeriod === 'last7') {
+          const lPast = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+          lParams.startDate = lPast.toISOString().slice(0, 10);
+          lParams.endDate = new Date().toISOString().slice(0, 10);
+        } else if (this.selectedPeriod === 'last30') {
+          const lPast = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+          lParams.startDate = lPast.toISOString().slice(0, 10);
+          lParams.endDate = new Date().toISOString().slice(0, 10);
+        } else if (this.selectedPeriod === 'custom') {
+          if (this.startDate) lParams.startDate = this.startDate;
+          if (this.endDate) lParams.endDate = this.endDate;
+        }
+
+        const lResponse = await EventService.orders.fetchSalesAnalytics(lParams);
+        if (lResponse.data && lResponse.data.success && lResponse.data.data) {
+          this.serverAnalytics = lResponse.data.data;
+        }
+      } catch (lError) {
+        this.serverAnalytics = null;
+      } finally {
+        this.analyticsLoading = false;
+      }
+    },
+    onPeriodChange(pPeriod) {
+      if (pPeriod !== 'custom') {
+        this.startDate = '';
+        this.endDate = '';
+        this.fetchAnalytics();
+      }
+    },
+    applyDateFilter() {
+      if (this.startDate && this.endDate && this.startDate > this.endDate) {
+        this.showSnackbar('[HNSA002] Start date cannot be after end date.', 'error');
+        return;
+      }
+      this.fetchAnalytics();
+    },
+    clearDateFilter() {
+      this.selectedPeriod = 'all';
+      this.startDate = '';
+      this.endDate = '';
+      this.fetchAnalytics();
+    },
+    exportCSV() {
+      try {
+        if (!this.filteredOrders || this.filteredOrders.length === 0) {
+          this.showSnackbar('No sales records available to export.', 'warning');
+          return;
+        }
+
+        const lHeaders = ['Order ID', 'Customer', 'Date', 'Items Count', 'Total Amount (₹)', 'Status'];
+        const lRows = this.filteredOrders.map(pOrder => [
+          `"${pOrder.id}"`,
+          `"${(pOrder.customer || '').replace(/"/g, '""')}"`,
+          `"${pOrder.createdAt || ''}"`,
+          pOrder.itemsCount || 0,
+          (Number(pOrder.totalAmount) || 0).toFixed(2),
+          `"${pOrder.status || 'Completed'}"`
+        ]);
+
+        const lCsvContent = [lHeaders.join(','), ...lRows.map(pRow => pRow.join(','))].join('\r\n');
+        const lBlob = new Blob([lCsvContent], { type: 'text/csv;charset=utf-8;' });
+        const lUrl = URL.createObjectURL(lBlob);
+        const lLink = document.createElement('a');
+        lLink.setAttribute('href', lUrl);
+        lLink.setAttribute('download', `shoptrack_sales_${new Date().toISOString().slice(0, 10)}.csv`);
+        document.body.appendChild(lLink);
+        lLink.click();
+        document.body.removeChild(lLink);
+        URL.revokeObjectURL(lUrl);
+
+        this.showSnackbar('Sales report exported to CSV successfully!', 'success');
+      } catch (lError) {
+        this.showSnackbar('[SVSA001] Failed to export sales CSV: ' + (lError.message || 'Unknown error'), 'error');
       }
     },
     async fetchProducts() {
@@ -543,14 +871,13 @@ export default {
         const lResponse = await EventService.products.fetchProducts();
         if (lResponse.data && lResponse.data.success) {
           this.availableProducts = lResponse.data.data || [];
+        } else if (Array.isArray(lResponse.data)) {
+          this.availableProducts = lResponse.data;
+        } else {
+          this.availableProducts = [];
         }
       } catch (lError) {
-        // Fallback placeholder products if backend offline
-        this.availableProducts = [
-          { id: 'prod-1', sku: 'CHAIR-ERG-001', name: 'Ergonomic Executive Office Chair', price: 24999.00, stockQuantity: 15 },
-          { id: 'prod-2', sku: 'KB-MECH-002', name: 'Mechanical RGB Gaming Keyboard', price: 10499.00, stockQuantity: 8 },
-          { id: 'prod-3', sku: 'DOCK-USBC-003', name: 'Triple-Display USB-C Docking Station', price: 15999.00, stockQuantity: 0 }
-        ];
+        this.availableProducts = [];
       }
     },
     openSalesDialog() {
@@ -633,7 +960,7 @@ export default {
           const lCreatedOrder = lResponse.data.data;
           this.showSnackbar(`Sale recorded successfully! Total: ₹${Number(lCreatedOrder.totalAmount).toFixed(2)}`, 'success');
           this.closeSalesDialog();
-          this.fetchOrders();
+          this.refreshData();
           this.fetchProducts();
         } else {
           this.formError = lResponse.data.message || '[HNCO004] Failed to record sale.';

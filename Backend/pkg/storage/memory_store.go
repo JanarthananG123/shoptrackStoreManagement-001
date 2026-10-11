@@ -3,6 +3,8 @@ package storage
 import (
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +74,10 @@ func (pStore *MemoryStore) seed() {
 			TotalAmount: 35498.00,
 			Status:      "Completed",
 			CreatedAt:   time.Now().Add(-48 * time.Hour).Format(time.RFC3339),
+			Items: []models.OrderItem{
+				{ProductID: "prod-1", Quantity: 1, UnitPrice: 24999.00},
+				{ProductID: "prod-2", Quantity: 1, UnitPrice: 10499.00},
+			},
 		},
 		{
 			ID:          "ORD-1002",
@@ -80,6 +86,9 @@ func (pStore *MemoryStore) seed() {
 			TotalAmount: 24999.00,
 			Status:      "Completed",
 			CreatedAt:   time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+			Items: []models.OrderItem{
+				{ProductID: "prod-1", Quantity: 1, UnitPrice: 24999.00},
+			},
 		},
 		{
 			ID:          "ORD-1003",
@@ -88,6 +97,11 @@ func (pStore *MemoryStore) seed() {
 			TotalAmount: 51497.00,
 			Status:      "Completed",
 			CreatedAt:   time.Now().Add(-2 * time.Hour).Format(time.RFC3339),
+			Items: []models.OrderItem{
+				{ProductID: "prod-1", Quantity: 1, UnitPrice: 24999.00},
+				{ProductID: "prod-2", Quantity: 1, UnitPrice: 10499.00},
+				{ProductID: "prod-3", Quantity: 1, UnitPrice: 15999.00},
+			},
 		},
 	}
 
@@ -163,7 +177,7 @@ func (pStore *MemoryStore) GetOrders() ([]models.Order, error) {
 	return lList, nil
 }
 
-// SaveOrder stores a new sales order in memory.
+// SaveOrder stores a new sales order in memory with collision prevention.
 func (pStore *MemoryStore) SaveOrder(pOrder models.Order) error {
 	log.Printf("[Storage][SaveOrder][IN] ID: %s, Customer: %s, Total: ₹%.2f", pOrder.ID, pOrder.Customer, pOrder.TotalAmount)
 	defer log.Printf("[Storage][SaveOrder][OUT] ID: %s", pOrder.ID)
@@ -177,9 +191,110 @@ func (pStore *MemoryStore) SaveOrder(pOrder models.Order) error {
 	pStore.mu.Lock()
 	defer pStore.mu.Unlock()
 
+	if _, lExists := pStore.orders[pOrder.ID]; lExists {
+		lErr := fmt.Errorf("[STSO001] order id already exists: %s", pOrder.ID)
+		log.Printf("[Storage][SaveOrder][ERROR] %v", lErr)
+		return lErr
+	}
+
 	pStore.orders[pOrder.ID] = pOrder
 	log.Printf("[Storage][SaveOrder] Successfully stored order ID: %s", pOrder.ID)
 	return nil
+}
+
+// CheckoutAtomic performs an atomic inventory validation, deduction, price enforcement, and order creation.
+func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.OrderItem) (*models.Order, error) {
+	log.Printf("[Storage][CheckoutAtomic][IN] Customer: %s, Items count: %d", pCustomer, len(pItems))
+	defer log.Println("[Storage][CheckoutAtomic][OUT]")
+
+	pStore.mu.Lock()
+	defer pStore.mu.Unlock()
+
+	if len(pItems) == 0 {
+		lErr := fmt.Errorf("[STCA001] order must contain at least one item")
+		log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
+		return nil, lErr
+	}
+
+	// Aggregate quantities by product_id to handle duplicate product lines in a single order payload
+	lAggregated := make(map[string]int)
+	for _, lItem := range pItems {
+		if lItem.Quantity <= 0 {
+			lErr := fmt.Errorf("[STCA001] item quantity must be greater than 0")
+			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
+			return nil, lErr
+		}
+		lAggregated[lItem.ProductID] += lItem.Quantity
+	}
+
+	// Check stock and existence for every product
+	for lProductID, lRequiredQty := range lAggregated {
+		lProd, lExists := pStore.products[lProductID]
+		if !lExists {
+			lErr := fmt.Errorf("[STCA002] product not found: %s", lProductID)
+			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
+			return nil, lErr
+		}
+		if lProd.StockQuantity < lRequiredQty {
+			lErr := fmt.Errorf("[STCA003] insufficient stock for '%s': available %d, requested %d", lProd.Name, lProd.StockQuantity, lRequiredQty)
+			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
+			return nil, lErr
+		}
+	}
+
+	// Once ALL items pass validation, proceed to deduction and total calculation in the same lock
+	var lTotalAmount float64
+	var lItemsCount int
+	var lOrderItems []models.OrderItem
+
+	for _, lItem := range pItems {
+		lProd := pStore.products[lItem.ProductID]
+		lActualPrice := lProd.Price // Enforce store price, ignore client-provided price
+		lTotalAmount += float64(lItem.Quantity) * lActualPrice
+		lItemsCount += lItem.Quantity
+
+		lOrderItems = append(lOrderItems, models.OrderItem{
+			ProductID: lItem.ProductID,
+			Quantity:  lItem.Quantity,
+			UnitPrice: lActualPrice,
+		})
+	}
+
+	// Deduct aggregated quantities from inventory
+	for lProductID, lRequiredQty := range lAggregated {
+		lProd := pStore.products[lProductID]
+		lProd.StockQuantity -= lRequiredQty
+		pStore.products[lProductID] = lProd
+		log.Printf("[Storage][CheckoutAtomic] Deducted %d from '%s', remaining stock: %d", lRequiredQty, lProd.Name, lProd.StockQuantity)
+	}
+
+	// Generate a unique Order ID server-side
+	lOrderID := fmt.Sprintf("ORD-%d", time.Now().UnixNano())
+	for {
+		if _, lExists := pStore.orders[lOrderID]; !lExists {
+			break
+		}
+		lOrderID = fmt.Sprintf("ORD-%d", time.Now().UnixNano())
+	}
+
+	lCustomerName := strings.TrimSpace(pCustomer)
+	if lCustomerName == "" {
+		lCustomerName = "Walk-in Customer"
+	}
+
+	lOrder := models.Order{
+		ID:          lOrderID,
+		Customer:    lCustomerName,
+		ItemsCount:  lItemsCount,
+		TotalAmount: lTotalAmount,
+		Status:      "Completed",
+		CreatedAt:   time.Now().Format(time.RFC3339),
+		Items:       lOrderItems,
+	}
+
+	pStore.orders[lOrderID] = lOrder
+	log.Printf("[Storage][CheckoutAtomic] Order successfully saved: ID=%s, Customer=%s, Total=₹%.2f, Items=%d", lOrderID, lCustomerName, lTotalAmount, lItemsCount)
+	return &lOrder, nil
 }
 
 // DeductStock decreases product stock in a thread-safe manner.
@@ -207,3 +322,106 @@ func (pStore *MemoryStore) DeductStock(pProductID string, pQuantity int) error {
 	log.Printf("[Storage][DeductStock] Updated stock for '%s': remaining %d", lProd.Name, lProd.StockQuantity)
 	return nil
 }
+
+// GetSalesAnalytics computes aggregate sales metrics and top selling products within an optional date range.
+func (pStore *MemoryStore) GetSalesAnalytics(pStartDate *time.Time, pEndDate *time.Time) (*models.SalesAnalytics, error) {
+	log.Println("[Storage][GetSalesAnalytics][IN]")
+	defer log.Println("[Storage][GetSalesAnalytics][OUT]")
+
+	pStore.mu.RLock()
+	defer pStore.mu.RUnlock()
+
+	var lTotalRevenue float64
+	var lOrderCount int
+	var lTotalUnitsSold int
+
+	lProductSales := make(map[string]*models.TopSellingProduct)
+
+	for _, lOrder := range pStore.orders {
+		// Parse order CreatedAt
+		lOrderTime, lErr := time.Parse(time.RFC3339, lOrder.CreatedAt)
+		if lErr != nil {
+			// Fallback for non-RFC3339 timestamps if any
+			lOrderTime, lErr = time.Parse("2006-01-02", lOrder.CreatedAt)
+		}
+
+		// Apply date filters if parsed successfully
+		if lErr == nil {
+			if pStartDate != nil && lOrderTime.Before(*pStartDate) {
+				continue
+			}
+			if pEndDate != nil && lOrderTime.After(*pEndDate) {
+				continue
+			}
+		}
+
+		lTotalRevenue += lOrder.TotalAmount
+		lOrderCount++
+		lTotalUnitsSold += lOrder.ItemsCount
+
+		// Aggregate product line items
+		for _, lItem := range lOrder.Items {
+			lTopProd, lExists := lProductSales[lItem.ProductID]
+			if !lExists {
+				lName := lItem.ProductID
+				if lProd, lFound := pStore.products[lItem.ProductID]; lFound {
+					lName = lProd.Name
+				}
+				lTopProd = &models.TopSellingProduct{
+					ProductID:   lItem.ProductID,
+					Name:        lName,
+					UnitsSold:   0,
+					TotalEarned: 0,
+				}
+				lProductSales[lItem.ProductID] = lTopProd
+			}
+			lTopProd.UnitsSold += lItem.Quantity
+			lTopProd.TotalEarned += float64(lItem.Quantity) * lItem.UnitPrice
+		}
+	}
+
+	var lAverageOrderVal float64
+	if lOrderCount > 0 {
+		lAverageOrderVal = lTotalRevenue / float64(lOrderCount)
+	}
+
+	// Convert map to slice and sort descending by UnitsSold, then TotalEarned
+	lTopList := make([]models.TopSellingProduct, 0, len(lProductSales))
+	for _, lTopProd := range lProductSales {
+		lTopList = append(lTopList, *lTopProd)
+	}
+
+	sort.Slice(lTopList, func(pI, pJ int) bool {
+		if lTopList[pI].UnitsSold == lTopList[pJ].UnitsSold {
+			return lTopList[pI].TotalEarned > lTopList[pJ].TotalEarned
+		}
+		return lTopList[pI].UnitsSold > lTopList[pJ].UnitsSold
+	})
+
+	// Take top 5
+	if len(lTopList) > 5 {
+		lTopList = lTopList[:5]
+	}
+
+	lPeriod := "all"
+	if pStartDate != nil && pEndDate != nil {
+		lPeriod = fmt.Sprintf("%s to %s", pStartDate.Format("2006-01-02"), pEndDate.Format("2006-01-02"))
+	} else if pStartDate != nil {
+		lPeriod = fmt.Sprintf("from %s", pStartDate.Format("2006-01-02"))
+	} else if pEndDate != nil {
+		lPeriod = fmt.Sprintf("until %s", pEndDate.Format("2006-01-02"))
+	}
+
+	lAnalytics := &models.SalesAnalytics{
+		TotalRevenue:    lTotalRevenue,
+		OrderCount:      lOrderCount,
+		AverageOrderVal: lAverageOrderVal,
+		TotalUnitsSold:  lTotalUnitsSold,
+		TopProducts:     lTopList,
+		Period:          lPeriod,
+	}
+
+	log.Printf("[Storage][GetSalesAnalytics] Revenue: ₹%.2f, Orders: %d, Units: %d, Period: %s", lTotalRevenue, lOrderCount, lTotalUnitsSold, lPeriod)
+	return lAnalytics, nil
+}
+
