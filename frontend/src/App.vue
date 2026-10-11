@@ -12,7 +12,7 @@
 
 <script>
 import AppNavbar from './components/AppNavbar.vue';
-import apiClient from './api/axiosConfig';
+import EventService from './services';
 
 export default {
   name: 'App',
@@ -43,7 +43,7 @@ export default {
     },
     async checkHealth() {
       try {
-        const response = await apiClient.get('/health');
+        const response = await EventService.checkHealth();
         this.isApiOnline = !!(response.data && response.data.success);
       } catch (error) {
         this.isApiOnline = false;

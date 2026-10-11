@@ -111,7 +111,7 @@
       >
         <!-- Unit Price Slot -->
         <template v-slot:item.price="{ item }">
-          <span class="font-weight-medium">${{ Number(item.price).toFixed(2) }}</span>
+          <span class="font-weight-medium">₹{{ Number(item.price).toFixed(2) }}</span>
         </template>
 
         <!-- Stock Level Slot -->
@@ -191,7 +191,7 @@
             <v-list-item>
               <v-list-item-content>
                 <v-list-item-subtitle>Unit Price</v-list-item-subtitle>
-                <v-list-item-title class="font-weight-bold">${{ Number(selectedProduct.price).toFixed(2) }}</v-list-item-title>
+                <v-list-item-title class="font-weight-bold">₹{{ Number(selectedProduct.price).toFixed(2) }}</v-list-item-title>
               </v-list-item-content>
             </v-list-item>
             <v-list-item>
@@ -228,7 +228,7 @@
 </template>
 
 <script>
-import apiClient from '../api/axiosConfig';
+import EventService from '../services';
 import ProductDialog from '../components/ProductDialog.vue';
 
 export default {
@@ -247,7 +247,7 @@ export default {
       headers: [
         { text: 'SKU', value: 'sku', align: 'start', sortable: true },
         { text: 'Product Name', value: 'name', align: 'start', sortable: true },
-        { text: 'Unit Price ($)', value: 'price', align: 'right', sortable: true },
+        { text: 'Unit Price (₹)', value: 'price', align: 'right', sortable: true },
         { text: 'Stock Level', value: 'stockQuantity', align: 'right', sortable: true },
         { text: 'Stock Status', value: 'status', align: 'center', sortable: false },
         { text: 'Actions', value: 'actions', align: 'center', sortable: false }
@@ -274,7 +274,7 @@ export default {
     async fetchProducts() {
       this.loading = true;
       try {
-        const response = await apiClient.get('/products');
+        const response = await EventService.fetchProducts();
         if (response.data && response.data.success) {
           this.products = response.data.data || [];
           this.$emit('api-status-change', true);
@@ -283,7 +283,7 @@ export default {
           this.$emit('api-status-change', false);
         }
       } catch (error) {
-        this.showSnackbar('Unable to connect to backend server at http://localhost:8080/api/v1', 'error');
+        this.showSnackbar('Unable to connect to backend server at http://localhost:8080/api', 'error');
         this.$emit('api-status-change', false);
       } finally {
         this.loading = false;
