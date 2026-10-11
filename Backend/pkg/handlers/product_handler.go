@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/mux"
 	"shoptrack-backend/pkg/models"
@@ -179,9 +180,9 @@ func (pHandler *ProductHandler) CheckoutOrderHandler(pWriter http.ResponseWriter
 	}
 
 	for _, lItem := range lPayload.Items {
-		if lItem.Quantity <= 0 {
-			log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO002] Item quantity must be greater than 0: %d", lItem.Quantity)
-			pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO002] Item quantity must be greater than 0", false)
+		if lItem.Quantity <= 0 || lItem.Quantity > 10000 {
+			log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO002] Item quantity must be between 1 and 10,000: %d", lItem.Quantity)
+			pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO002] Item quantity must be between 1 and 10,000", false)
 			return
 		}
 	}
@@ -192,8 +193,8 @@ func (pHandler *ProductHandler) CheckoutOrderHandler(pWriter http.ResponseWriter
 		return
 	}
 
-	if len(lPayload.Customer) > 100 {
-		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO004] Customer name exceeds 100 characters: %d", len(lPayload.Customer))
+	if utf8.RuneCountInString(lPayload.Customer) > 100 {
+		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO004] Customer name exceeds 100 characters: %d runes", utf8.RuneCountInString(lPayload.Customer))
 		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO004] Customer name exceeds 100 characters", false)
 		return
 	}
@@ -202,14 +203,18 @@ func (pHandler *ProductHandler) CheckoutOrderHandler(pWriter http.ResponseWriter
 	lOrder, lCheckoutErr := pHandler.store.CheckoutAtomic(lPayload.Customer, lPayload.Items)
 	if lCheckoutErr != nil {
 		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] Checkout failed: %v", lCheckoutErr)
-		lErrStr := lCheckoutErr.Error()
-		if strings.Contains(lErrStr, "STCA002") {
-			pHandler.sendJSON(pWriter, http.StatusNotFound, nil, "[HNCO005] Product not found", false)
-			return
-		}
-		if strings.Contains(lErrStr, "STCA003") {
-			pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO006] Insufficient stock", false)
-			return
+		if lCustomErr, lOk := lCheckoutErr.(*storage.CheckoutError); lOk {
+			switch lCustomErr.Code {
+			case "STCA002":
+				pHandler.sendJSON(pWriter, http.StatusNotFound, nil, fmt.Sprintf("[HNCO005] %s", lCustomErr.Message), false)
+				return
+			case "STCA003":
+				pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, fmt.Sprintf("[HNCO006] %s", lCustomErr.Message), false)
+				return
+			default:
+				pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, fmt.Sprintf("[HNCO007] %s", lCustomErr.Message), false)
+				return
+			}
 		}
 		pHandler.sendJSON(pWriter, http.StatusInternalServerError, nil, "[HNCO007] Internal checkout failure", false)
 		return

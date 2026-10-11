@@ -230,8 +230,8 @@ func TestOrders(pT *testing.T) {
 	if lExcessRec.Code != http.StatusBadRequest {
 		pT.Fatalf("Expected 400 for excess order, got %d. Body: %s", lExcessRec.Code, lExcessRec.Body.String())
 	}
-	if !strings.Contains(lExcessRec.Body.String(), "HNCO006") {
-		pT.Fatalf("Expected error code HNCO006 in body, got: %s", lExcessRec.Body.String())
+	if !strings.Contains(lExcessRec.Body.String(), "HNCO006") || !strings.Contains(lExcessRec.Body.String(), "Mechanical RGB Gaming Keyboard") {
+		pT.Fatalf("Expected error code HNCO006 and product details in body, got: %s", lExcessRec.Body.String())
 	}
 
 	// Verify rollback: stock of prod-2 must remain 3
@@ -240,7 +240,7 @@ func TestOrders(pT *testing.T) {
 		pT.Errorf("Expected stock of prod-2 to remain 3 after failed checkout, got %d", lProd2After.StockQuantity)
 	}
 
-	// 6. Unknown product returns HTTP 404 with [HNCO005]
+	// 6. Unknown product returns HTTP 404 with [HNCO005] and product ID detail
 	lUnknownOrder := `{"customer":"Unknown Prod","items":[{"product_id":"prod-999","quantity":1}]}`
 	lUnknownReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lUnknownOrder))
 	lUnknownReq.Header.Set("Content-Type", "application/json")
@@ -250,8 +250,8 @@ func TestOrders(pT *testing.T) {
 	if lUnknownRec.Code != http.StatusNotFound {
 		pT.Fatalf("Expected 404 for unknown product, got %d. Body: %s", lUnknownRec.Code, lUnknownRec.Body.String())
 	}
-	if !strings.Contains(lUnknownRec.Body.String(), "HNCO005") {
-		pT.Fatalf("Expected error code HNCO005 in body, got: %s", lUnknownRec.Body.String())
+	if !strings.Contains(lUnknownRec.Body.String(), "HNCO005") || !strings.Contains(lUnknownRec.Body.String(), "prod-999") {
+		pT.Fatalf("Expected error code HNCO005 and product ID detail in body, got: %s", lUnknownRec.Body.String())
 	}
 
 	// 7. Invalid quantity <= 0 returns HTTP 400 with [HNCO002]
@@ -281,6 +281,20 @@ func TestOrders(pT *testing.T) {
 	if !strings.Contains(lLongCustRec.Body.String(), "HNCO004") {
 		pT.Fatalf("Expected error code HNCO004 in body, got: %s", lLongCustRec.Body.String())
 	}
+
+	// 9. Quantity exceeding 10,000 returns HTTP 400 with [HNCO002]
+	lHugeQtyOrder := `{"customer":"Huge Qty","items":[{"product_id":"prod-1","quantity":10001}]}`
+	lHugeReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lHugeQtyOrder))
+	lHugeReq.Header.Set("Content-Type", "application/json")
+	lHugeRec := httptest.NewRecorder()
+	lHandler.ServeHTTP(lHugeRec, lHugeReq)
+
+	if lHugeRec.Code != http.StatusBadRequest {
+		pT.Fatalf("Expected 400 for quantity > 10,000, got %d. Body: %s", lHugeRec.Code, lHugeRec.Body.String())
+	}
+	if !strings.Contains(lHugeRec.Body.String(), "HNCO002") {
+		pT.Fatalf("Expected error code HNCO002 in body, got: %s", lHugeRec.Body.String())
+	}
 }
 
 func TestMultiItemAtomicRollback(pT *testing.T) {
@@ -304,12 +318,12 @@ func TestMultiItemAtomicRollback(pT *testing.T) {
 	lRec := httptest.NewRecorder()
 	lHandler.ServeHTTP(lRec, lReq)
 
-	// 3. Verify handler returns HTTP 400 with error code HNCO006
+	// 3. Verify handler returns HTTP 400 with error code HNCO006 and rich detail
 	if lRec.Code != http.StatusBadRequest {
 		pT.Fatalf("Expected HTTP 400 for multi-item order with exceeding quantity, got %d. Body: %s", lRec.Code, lRec.Body.String())
 	}
-	if !strings.Contains(lRec.Body.String(), "HNCO006") {
-		pT.Errorf("Expected error code HNCO006 in response body, got: %s", lRec.Body.String())
+	if !strings.Contains(lRec.Body.String(), "HNCO006") || !strings.Contains(lRec.Body.String(), "Mechanical RGB Gaming Keyboard") {
+		pT.Errorf("Expected error code HNCO006 and stock details in response body, got: %s", lRec.Body.String())
 	}
 
 	// 4. Fetch prod-1 and assert that its stock remains 15 (no partial stock deduction occurred)
@@ -319,6 +333,34 @@ func TestMultiItemAtomicRollback(pT *testing.T) {
 	}
 	if lProd1After.StockQuantity != 15 {
 		pT.Errorf("Expected stock for prod-1 to remain 15 (atomic rollback failed), got %d", lProd1After.StockQuantity)
+	}
+}
+
+func TestUnicodeCustomerNameCheckout(pT *testing.T) {
+	lHandler, _ := setupTestRouter()
+
+	// Multi-byte Unicode customer name: 44 runes in Hindi, which is ~120 bytes (> 100 bytes).
+	// Under rune character counting (<= 100 runes), this must successfully pass validation.
+	lUnicodeCustomer := "आरव शर्मा - विशेष प्रीमियम ग्राहक खाता संख्या"
+	lUnicodeOrder := `{"customer":"` + lUnicodeCustomer + `","items":[{"product_id":"prod-1","quantity":1}]}`
+	lReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lUnicodeOrder))
+	lReq.Header.Set("Content-Type", "application/json")
+	lRec := httptest.NewRecorder()
+	lHandler.ServeHTTP(lRec, lReq)
+
+	if lRec.Code != http.StatusCreated {
+		pT.Fatalf("Expected HTTP 201 for valid Unicode customer name under 100 runes, got %d. Body: %s", lRec.Code, lRec.Body.String())
+	}
+
+	var lResp struct {
+		Success bool         `json:"success"`
+		Data    models.Order `json:"data"`
+	}
+	if lErr := json.NewDecoder(lRec.Body).Decode(&lResp); lErr != nil {
+		pT.Fatalf("Failed to decode response: %v", lErr)
+	}
+	if lResp.Data.Customer != lUnicodeCustomer {
+		pT.Errorf("Expected customer name '%s', got '%s'", lUnicodeCustomer, lResp.Data.Customer)
 	}
 }
 
