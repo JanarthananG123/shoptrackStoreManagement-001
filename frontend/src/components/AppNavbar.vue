@@ -1,9 +1,19 @@
 <template>
   <v-app-bar app elevation="4" class="px-2">
     <v-icon color="primary" large class="mr-3">mdi-storefront</v-icon>
-    <v-toolbar-title class="font-weight-bold text-h6 tracking-wide">
+    <v-toolbar-title class="font-weight-bold text-h6 tracking-wide mr-4">
       Codzee Store &amp; Inventory Manager
     </v-toolbar-title>
+
+    <!-- Navigation Links -->
+    <v-btn text to="/" class="font-weight-bold" exact active-class="primary white--text">
+      <v-icon left small>mdi-package-variant-closed</v-icon>
+      Inventory
+    </v-btn>
+    <v-btn text to="/sales" class="ml-2 font-weight-bold" active-class="primary white--text">
+      <v-icon left small>mdi-chart-box-outline</v-icon>
+      Sales
+    </v-btn>
 
     <v-spacer></v-spacer>
 

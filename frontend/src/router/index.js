@@ -1,6 +1,7 @@
 import Vue from 'vue';
 import VueRouter from 'vue-router';
 import ProductsView from '../views/ProductsView.vue';
+import SalesView from '../views/SalesView.vue';
 
 Vue.use(VueRouter);
 
@@ -13,6 +14,11 @@ const routes = [
   {
     path: '/products',
     redirect: '/'
+  },
+  {
+    path: '/sales',
+    name: 'Sales',
+    component: SalesView
   }
 ];
 

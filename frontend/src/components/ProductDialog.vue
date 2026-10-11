@@ -43,13 +43,13 @@
             <v-col cols="12" sm="6">
               <v-text-field
                 v-model.number="form.price"
-                label="Unit Price ($) *"
+                label="Unit Price (₹) *"
                 type="number"
                 step="0.01"
                 min="0.01"
                 outlined
                 dense
-                prepend-inner-icon="mdi-currency-usd"
+                prepend-inner-icon="mdi-currency-inr"
                 :rules="priceRules"
                 required
               ></v-text-field>
@@ -107,7 +107,7 @@
 </template>
 
 <script>
-import apiClient from '../api/axiosConfig';
+import EventService from '../services';
 
 export default {
   name: 'ProductDialog',
@@ -192,7 +192,7 @@ export default {
           stockQuantity: parseInt(this.form.stockQuantity, 10)
         };
 
-        const response = await apiClient.post('/products', payload);
+        const response = await EventService.createProduct(payload);
         if (response.data && response.data.success) {
           this.$emit('saved', response.data.data);
           this.closeDialog();
