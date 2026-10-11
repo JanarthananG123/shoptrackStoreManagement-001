@@ -187,6 +187,7 @@ func TestOrders(pT *testing.T) {
 
 	// 4. Duplicate line items in single order: quantities should be aggregated before checking & deducting
 	// prod-2 has initial stock 8. Request 2 + 3 = 5 items. Remaining stock should be 8 - 5 = 3.
+	// Returned order must contain exactly one consolidated line for prod-2.
 	lDuplicateOrder := `{"customer":"Ravi Sharma","items":[{"product_id":"prod-2","quantity":2},{"product_id":"prod-2","quantity":3}]}`
 	lDupReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lDuplicateOrder))
 	lDupReq.Header.Set("Content-Type", "application/json")
@@ -197,6 +198,19 @@ func TestOrders(pT *testing.T) {
 		pT.Fatalf("Expected 201 for duplicate line items order, got %d. Body: %s", lDupRec.Code, lDupRec.Body.String())
 	}
 
+	var lDupResp struct {
+		Success bool         `json:"success"`
+		Data    models.Order `json:"data"`
+	}
+	if lErr := json.NewDecoder(lDupRec.Body).Decode(&lDupResp); lErr != nil {
+		pT.Fatalf("Failed to decode duplicate order response: %v", lErr)
+	}
+	if len(lDupResp.Data.Items) != 1 {
+		pT.Errorf("Expected consolidated order to contain exactly 1 line item, got %d", len(lDupResp.Data.Items))
+	} else if lDupResp.Data.Items[0].ProductID != "prod-2" || lDupResp.Data.Items[0].Quantity != 5 {
+		pT.Errorf("Expected consolidated item to have ProductID 'prod-2' and Quantity 5, got %+v", lDupResp.Data.Items[0])
+	}
+
 	lProd2, lFound2 := lStore.GetByID("prod-2")
 	if !lFound2 {
 		pT.Fatalf("Product prod-2 not found in store")
@@ -205,7 +219,7 @@ func TestOrders(pT *testing.T) {
 		pT.Errorf("Expected remaining stock for prod-2 to be 3, got %d", lProd2.StockQuantity)
 	}
 
-	// 5. Insufficient stock should return 400 with error code [STCA003] and rollback without partial deduction
+	// 5. Insufficient stock should return 400 with error code [HNCO006] and rollback without partial deduction
 	// prod-2 has 3 stock left. Requesting 5 should fail and stock should stay 3.
 	lExcessOrder := `{"customer":"Too Much","items":[{"product_id":"prod-2","quantity":5}]}`
 	lExcessReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lExcessOrder))
@@ -216,8 +230,8 @@ func TestOrders(pT *testing.T) {
 	if lExcessRec.Code != http.StatusBadRequest {
 		pT.Fatalf("Expected 400 for excess order, got %d. Body: %s", lExcessRec.Code, lExcessRec.Body.String())
 	}
-	if !strings.Contains(lExcessRec.Body.String(), "STCA003") {
-		pT.Fatalf("Expected error code STCA003 in body, got: %s", lExcessRec.Body.String())
+	if !strings.Contains(lExcessRec.Body.String(), "HNCO006") {
+		pT.Fatalf("Expected error code HNCO006 in body, got: %s", lExcessRec.Body.String())
 	}
 
 	// Verify rollback: stock of prod-2 must remain 3
@@ -226,18 +240,46 @@ func TestOrders(pT *testing.T) {
 		pT.Errorf("Expected stock of prod-2 to remain 3 after failed checkout, got %d", lProd2After.StockQuantity)
 	}
 
-	// 6. Unknown product returns 400 with [STCA002]
+	// 6. Unknown product returns HTTP 404 with [HNCO005]
 	lUnknownOrder := `{"customer":"Unknown Prod","items":[{"product_id":"prod-999","quantity":1}]}`
 	lUnknownReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lUnknownOrder))
 	lUnknownReq.Header.Set("Content-Type", "application/json")
 	lUnknownRec := httptest.NewRecorder()
 	lHandler.ServeHTTP(lUnknownRec, lUnknownReq)
 
-	if lUnknownRec.Code != http.StatusBadRequest {
-		pT.Fatalf("Expected 400 for unknown product, got %d. Body: %s", lUnknownRec.Code, lUnknownRec.Body.String())
+	if lUnknownRec.Code != http.StatusNotFound {
+		pT.Fatalf("Expected 404 for unknown product, got %d. Body: %s", lUnknownRec.Code, lUnknownRec.Body.String())
 	}
-	if !strings.Contains(lUnknownRec.Body.String(), "STCA002") {
-		pT.Fatalf("Expected error code STCA002 in body, got: %s", lUnknownRec.Body.String())
+	if !strings.Contains(lUnknownRec.Body.String(), "HNCO005") {
+		pT.Fatalf("Expected error code HNCO005 in body, got: %s", lUnknownRec.Body.String())
+	}
+
+	// 7. Invalid quantity <= 0 returns HTTP 400 with [HNCO002]
+	lZeroQtyOrder := `{"customer":"Zero Qty","items":[{"product_id":"prod-1","quantity":0}]}`
+	lZeroReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lZeroQtyOrder))
+	lZeroReq.Header.Set("Content-Type", "application/json")
+	lZeroRec := httptest.NewRecorder()
+	lHandler.ServeHTTP(lZeroRec, lZeroReq)
+
+	if lZeroRec.Code != http.StatusBadRequest {
+		pT.Fatalf("Expected 400 for zero quantity, got %d. Body: %s", lZeroRec.Code, lZeroRec.Body.String())
+	}
+	if !strings.Contains(lZeroRec.Body.String(), "HNCO002") {
+		pT.Fatalf("Expected error code HNCO002 in body, got: %s", lZeroRec.Body.String())
+	}
+
+	// 8. Customer name exceeds 100 characters returns HTTP 400 with [HNCO004]
+	lLongCustOrder := `{"customer":"This is an excessively long customer name that deliberately exceeds the maximum allowed one hundred characters threshold for checkout","items":[{"product_id":"prod-1","quantity":1}]}`
+	lLongCustReq := httptest.NewRequest(http.MethodPost, "/api/orders", strings.NewReader(lLongCustOrder))
+	lLongCustReq.Header.Set("Content-Type", "application/json")
+	lLongCustRec := httptest.NewRecorder()
+	lHandler.ServeHTTP(lLongCustRec, lLongCustReq)
+
+	if lLongCustRec.Code != http.StatusBadRequest {
+		pT.Fatalf("Expected 400 for long customer name, got %d. Body: %s", lLongCustRec.Code, lLongCustRec.Body.String())
+	}
+	if !strings.Contains(lLongCustRec.Body.String(), "HNCO004") {
+		pT.Fatalf("Expected error code HNCO004 in body, got: %s", lLongCustRec.Body.String())
 	}
 }
 
@@ -262,12 +304,12 @@ func TestMultiItemAtomicRollback(pT *testing.T) {
 	lRec := httptest.NewRecorder()
 	lHandler.ServeHTTP(lRec, lReq)
 
-	// 3. Verify handler returns HTTP 400 with error code STCA003
+	// 3. Verify handler returns HTTP 400 with error code HNCO006
 	if lRec.Code != http.StatusBadRequest {
 		pT.Fatalf("Expected HTTP 400 for multi-item order with exceeding quantity, got %d. Body: %s", lRec.Code, lRec.Body.String())
 	}
-	if !strings.Contains(lRec.Body.String(), "STCA003") {
-		pT.Errorf("Expected error code STCA003 in response body, got: %s", lRec.Body.String())
+	if !strings.Contains(lRec.Body.String(), "HNCO006") {
+		pT.Errorf("Expected error code HNCO006 in response body, got: %s", lRec.Body.String())
 	}
 
 	// 4. Fetch prod-1 and assert that its stock remains 15 (no partial stock deduction occurred)

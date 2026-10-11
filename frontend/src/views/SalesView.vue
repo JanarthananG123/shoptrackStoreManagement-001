@@ -617,6 +617,7 @@ export default {
       search: '',
       loading: false,
       analyticsLoading: false,
+      gAnalyticsRequestId: 0,
       serverAnalytics: null,
       selectedPeriod: 'all',
       startDate: '',
@@ -791,6 +792,7 @@ export default {
       }
     },
     async fetchAnalytics() {
+      const lRequestId = ++this.gAnalyticsRequestId;
       this.analyticsLoading = true;
       try {
         const lParams = {};
@@ -814,13 +816,21 @@ export default {
         }
 
         const lResponse = await EventService.orders.fetchSalesAnalytics(lParams);
+        if (lRequestId !== this.gAnalyticsRequestId) {
+          return; // Discard stale in-flight response
+        }
         if (lResponse.data && lResponse.data.success && lResponse.data.data) {
           this.serverAnalytics = lResponse.data.data;
         }
       } catch (lError) {
+        if (lRequestId !== this.gAnalyticsRequestId) {
+          return; // Discard stale in-flight response
+        }
         this.serverAnalytics = null;
       } finally {
-        this.analyticsLoading = false;
+        if (lRequestId === this.gAnalyticsRequestId) {
+          this.analyticsLoading = false;
+        }
       }
     },
     onPeriodChange(pPeriod) {

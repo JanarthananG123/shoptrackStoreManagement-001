@@ -178,11 +178,40 @@ func (pHandler *ProductHandler) CheckoutOrderHandler(pWriter http.ResponseWriter
 		return
 	}
 
+	for _, lItem := range lPayload.Items {
+		if lItem.Quantity <= 0 {
+			log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO002] Item quantity must be greater than 0: %d", lItem.Quantity)
+			pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO002] Item quantity must be greater than 0", false)
+			return
+		}
+	}
+
+	if len(lPayload.Items) > 50 {
+		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO003] Maximum 50 line items permitted per order: %d", len(lPayload.Items))
+		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO003] Maximum 50 line items permitted per order", false)
+		return
+	}
+
+	if len(lPayload.Customer) > 100 {
+		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] [HNCO004] Customer name exceeds 100 characters: %d", len(lPayload.Customer))
+		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO004] Customer name exceeds 100 characters", false)
+		return
+	}
+
 	// Atomically validate inventory, enforce server-side prices, deduct stock, and save order
 	lOrder, lCheckoutErr := pHandler.store.CheckoutAtomic(lPayload.Customer, lPayload.Items)
 	if lCheckoutErr != nil {
 		log.Printf("[ProductHandler][CheckoutOrderHandler][ERROR] Checkout failed: %v", lCheckoutErr)
-		pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, lCheckoutErr.Error(), false)
+		lErrStr := lCheckoutErr.Error()
+		if strings.Contains(lErrStr, "STCA002") {
+			pHandler.sendJSON(pWriter, http.StatusNotFound, nil, "[HNCO005] Product not found", false)
+			return
+		}
+		if strings.Contains(lErrStr, "STCA003") {
+			pHandler.sendJSON(pWriter, http.StatusBadRequest, nil, "[HNCO006] Insufficient stock", false)
+			return
+		}
+		pHandler.sendJSON(pWriter, http.StatusInternalServerError, nil, "[HNCO007] Internal checkout failure", false)
 		return
 	}
 

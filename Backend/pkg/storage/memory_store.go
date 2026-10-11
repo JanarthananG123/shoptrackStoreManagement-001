@@ -185,19 +185,35 @@ func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.Orde
 	pStore.mu.Lock()
 	defer pStore.mu.Unlock()
 
+	if len(pCustomer) > 100 {
+		lErr := fmt.Errorf("[STCA004] customer name too long")
+		log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
+		return nil, lErr
+	}
+
 	if len(pItems) == 0 {
 		lErr := fmt.Errorf("[STCA001] order must contain at least one item")
 		log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 		return nil, lErr
 	}
 
+	if len(pItems) > 50 {
+		lErr := fmt.Errorf("[STCA005] too many line items")
+		log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
+		return nil, lErr
+	}
+
 	// Aggregate quantities by product_id to handle duplicate product lines in a single order payload
 	lAggregated := make(map[string]int)
+	var lSeenProductIDs []string
 	for _, lItem := range pItems {
 		if lItem.Quantity <= 0 {
 			lErr := fmt.Errorf("[STCA001] item quantity must be greater than 0")
 			log.Printf("[Storage][CheckoutAtomic][ERROR] %v", lErr)
 			return nil, lErr
+		}
+		if _, lExists := lAggregated[lItem.ProductID]; !lExists {
+			lSeenProductIDs = append(lSeenProductIDs, lItem.ProductID)
 		}
 		lAggregated[lItem.ProductID] += lItem.Quantity
 	}
@@ -222,21 +238,24 @@ func (pStore *MemoryStore) CheckoutAtomic(pCustomer string, pItems []models.Orde
 	var lItemsCount int
 	var lOrderItems []models.OrderItem
 
-	for _, lItem := range pItems {
-		lProd := pStore.products[lItem.ProductID]
+	// Build lOrderItems using the aggregated product map so stored orders contain exactly one consolidated line per unique product_id
+	for _, lProductID := range lSeenProductIDs {
+		lQty := lAggregated[lProductID]
+		lProd := pStore.products[lProductID]
 		lActualPrice := lProd.Price // Enforce store price, ignore client-provided price
-		lTotalAmount += float64(lItem.Quantity) * lActualPrice
-		lItemsCount += lItem.Quantity
+		lTotalAmount += float64(lQty) * lActualPrice
+		lItemsCount += lQty
 
 		lOrderItems = append(lOrderItems, models.OrderItem{
-			ProductID: lItem.ProductID,
-			Quantity:  lItem.Quantity,
+			ProductID: lProductID,
+			Quantity:  lQty,
 			UnitPrice: lActualPrice,
 		})
 	}
 
 	// Deduct aggregated quantities from inventory
-	for lProductID, lRequiredQty := range lAggregated {
+	for _, lProductID := range lSeenProductIDs {
+		lRequiredQty := lAggregated[lProductID]
 		lProd := pStore.products[lProductID]
 		lProd.StockQuantity -= lRequiredQty
 		pStore.products[lProductID] = lProd
